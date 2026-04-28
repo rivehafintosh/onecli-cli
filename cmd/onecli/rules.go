@@ -20,17 +20,22 @@ type RulesCmd struct {
 
 // RulesListCmd is `onecli rules list`.
 type RulesListCmd struct {
-	Fields string `optional:"" help:"Comma-separated list of fields to include in output."`
-	Quiet  string `optional:"" name:"quiet" help:"Output only the specified field, one per line."`
-	Max    int    `optional:"" default:"20" help:"Maximum number of results to return."`
+	Project string `optional:"" short:"p" help:"Project slug."`
+	Fields  string `optional:"" help:"Comma-separated list of fields to include in output."`
+	Quiet   string `optional:"" name:"quiet" help:"Output only the specified field, one per line."`
+	Max     int    `optional:"" default:"20" help:"Maximum number of results to return."`
 }
 
 func (c *RulesListCmd) Run(out *output.Writer) error {
+	project, err := resolveProject(c.Project)
+	if err != nil {
+		return err
+	}
 	client, err := newClient()
 	if err != nil {
 		return err
 	}
-	rules, err := client.ListRules(newContext())
+	rules, err := client.ListRules(newContext(), project)
 	if err != nil {
 		return err
 	}
@@ -66,6 +71,7 @@ func (c *RulesGetCmd) Run(out *output.Writer) error {
 
 // RulesCreateCmd is `onecli rules create`.
 type RulesCreateCmd struct {
+	Project         string `optional:"" short:"p" help:"Project slug."`
 	Name            string `required:"" help:"Display name for the rule."`
 	HostPattern     string `required:"" name:"host-pattern" help:"Host pattern to match (e.g. 'api.anthropic.com')."`
 	Action          string `required:"" help:"Action to take: 'block' or 'rate_limit'."`
@@ -111,11 +117,15 @@ func (c *RulesCreateCmd) Run(out *output.Writer) error {
 		return out.WriteDryRun("Would create rule", input)
 	}
 
+	project, err := resolveProject(c.Project)
+	if err != nil {
+		return err
+	}
 	client, err := newClient()
 	if err != nil {
 		return err
 	}
-	rule, err := client.CreateRule(newContext(), input)
+	rule, err := client.CreateRule(newContext(), project, input)
 	if err != nil {
 		return err
 	}
