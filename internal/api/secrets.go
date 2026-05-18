@@ -18,6 +18,10 @@ type Secret struct {
 	TypeLabel       string           `json:"typeLabel,omitempty"`
 	Preview         string           `json:"preview,omitempty"`
 	Warning         string           `json:"warning,omitempty"`
+	Source          string           `json:"source,omitempty"`
+	VaultProvider   string           `json:"vaultProvider,omitempty"`
+	VaultPath       string           `json:"vaultPath,omitempty"`
+	VaultField      string           `json:"vaultField,omitempty"`
 }
 
 // InjectionConfig describes how a secret is injected into requests.

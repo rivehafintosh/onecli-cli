@@ -8,43 +8,54 @@ import (
 
 // Rule represents a policy rule returned by the API.
 type Rule struct {
-	ID              string  `json:"id"`
-	Name            string  `json:"name"`
-	HostPattern     string  `json:"hostPattern"`
-	PathPattern     *string `json:"pathPattern"`
-	Method          *string `json:"method"`
-	Action          string  `json:"action"`
-	Enabled         bool    `json:"enabled"`
-	AgentID         *string `json:"agentId"`
-	RateLimit       *int    `json:"rateLimit"`
-	RateLimitWindow *string `json:"rateLimitWindow"`
-	CreatedAt       string  `json:"createdAt"`
+	ID              string          `json:"id"`
+	Name            string          `json:"name"`
+	HostPattern     string          `json:"hostPattern"`
+	PathPattern     *string         `json:"pathPattern"`
+	Method          *string         `json:"method"`
+	Action          string          `json:"action"`
+	Enabled         bool            `json:"enabled"`
+	AgentID         *string         `json:"agentId"`
+	RateLimit       *int            `json:"rateLimit"`
+	RateLimitWindow *string         `json:"rateLimitWindow"`
+	Conditions      []RuleCondition `json:"conditions,omitempty"`
+	CreatedAt       string          `json:"createdAt"`
+}
+
+// RuleCondition describes a request-content condition for a policy rule.
+type RuleCondition struct {
+	Target   string `json:"target"`
+	Operator string `json:"operator"`
+	Value    string `json:"value"`
+	Key      string `json:"key,omitempty"`
 }
 
 // CreateRuleInput is the request body for creating a rule.
 type CreateRuleInput struct {
-	Name            string `json:"name"`
-	HostPattern     string `json:"hostPattern"`
-	PathPattern     string `json:"pathPattern,omitempty"`
-	Method          string `json:"method,omitempty"`
-	Action          string `json:"action"`
-	Enabled         bool   `json:"enabled"`
-	AgentID         string `json:"agentId,omitempty"`
-	RateLimit       *int   `json:"rateLimit,omitempty"`
-	RateLimitWindow string `json:"rateLimitWindow,omitempty"`
+	Name            string          `json:"name"`
+	HostPattern     string          `json:"hostPattern"`
+	PathPattern     string          `json:"pathPattern,omitempty"`
+	Method          string          `json:"method,omitempty"`
+	Action          string          `json:"action"`
+	Enabled         bool            `json:"enabled"`
+	AgentID         string          `json:"agentId,omitempty"`
+	RateLimit       *int            `json:"rateLimit,omitempty"`
+	RateLimitWindow string          `json:"rateLimitWindow,omitempty"`
+	Conditions      []RuleCondition `json:"conditions,omitempty"`
 }
 
 // UpdateRuleInput is the request body for updating a rule.
 type UpdateRuleInput struct {
-	Name            *string `json:"name,omitempty"`
-	HostPattern     *string `json:"hostPattern,omitempty"`
-	PathPattern     *string `json:"pathPattern,omitempty"`
-	Method          *string `json:"method,omitempty"`
-	Action          *string `json:"action,omitempty"`
-	Enabled         *bool   `json:"enabled,omitempty"`
-	AgentID         *string `json:"agentId,omitempty"`
-	RateLimit       *int    `json:"rateLimit,omitempty"`
-	RateLimitWindow *string `json:"rateLimitWindow,omitempty"`
+	Name            *string         `json:"name,omitempty"`
+	HostPattern     *string         `json:"hostPattern,omitempty"`
+	PathPattern     *string         `json:"pathPattern,omitempty"`
+	Method          *string         `json:"method,omitempty"`
+	Action          *string         `json:"action,omitempty"`
+	Enabled         *bool           `json:"enabled,omitempty"`
+	AgentID         *string         `json:"agentId,omitempty"`
+	RateLimit       *int            `json:"rateLimit,omitempty"`
+	RateLimitWindow *string         `json:"rateLimitWindow,omitempty"`
+	Conditions      []RuleCondition `json:"conditions,omitempty"`
 }
 
 // ListRules returns all policy rules for the authenticated user.
