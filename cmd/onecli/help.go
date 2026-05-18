@@ -83,7 +83,7 @@ func (cmd *HelpCmd) Run(out *output.Writer) error {
 			{Name: "secrets create", Description: "Create a new secret.", Args: []ArgInfo{
 				{Name: "--project, -p", Description: "Project slug."},
 				{Name: "--name", Required: true, Description: "Display name for the secret."},
-				{Name: "--type", Required: true, Description: "Secret type: 'anthropic' or 'generic'."},
+				{Name: "--type", Required: true, Description: "Secret type: 'anthropic', 'openai', or 'generic'."},
 				{Name: "--value", Required: true, Description: "Secret value (e.g. API key)."},
 				{Name: "--host-pattern", Required: true, Description: "Host pattern to match."},
 			}},
@@ -115,7 +115,7 @@ func (cmd *HelpCmd) Run(out *output.Writer) error {
 				{Name: "--project, -p", Description: "Project slug."},
 				{Name: "--name", Required: true, Description: "Display name for the rule."},
 				{Name: "--host-pattern", Required: true, Description: "Host pattern to match."},
-				{Name: "--action", Required: true, Description: "Action: 'block' or 'rate_limit'."},
+				{Name: "--action", Required: true, Description: "Action: 'block', 'rate_limit', or 'manual_approval'."},
 			}},
 			{Name: "rules update", Description: "Update an existing policy rule.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the rule to update."},
@@ -193,6 +193,28 @@ func (cmd *HelpCmd) Run(out *output.Writer) error {
 			{Name: "org apps toggle", Description: "Enable or disable an app config at the org level.", Args: []ArgInfo{
 				{Name: "--provider", Required: true, Description: "Provider name (e.g. 'github', 'gmail')."},
 				{Name: "--enabled", Required: true, Description: "Set to true to enable, false to disable."},
+			}},
+			{Name: "hashicorp-vault mappings list", Description: "List HashiCorp Vault hostname mappings."},
+			{Name: "hashicorp-vault mappings upsert", Description: "Create or update a HashiCorp Vault hostname mapping.", Args: []ArgInfo{
+				{Name: "--hostname", Required: true, Description: "Upstream hostname, e.g. api.openai.com."},
+				{Name: "--path", Required: true, Description: "Vault logical secret path."},
+				{Name: "--field", Required: true, Description: "Vault field containing the credential value."},
+			}},
+			{Name: "hashicorp-vault mappings delete", Description: "Delete a HashiCorp Vault hostname mapping.", Args: []ArgInfo{
+				{Name: "--hostname", Required: true, Description: "Upstream hostname, e.g. api.openai.com."},
+				{Name: "--path", Required: true, Description: "Vault logical secret path."},
+				{Name: "--field", Required: true, Description: "Vault field containing the credential value."},
+			}},
+			{Name: "hashicorp-vault paths list", Description: "List children under a HashiCorp Vault KV path.", Args: []ArgInfo{
+				{Name: "--path", Description: "Vault logical path to list."},
+			}},
+			{Name: "hashicorp-vault secrets metadata", Description: "Show fields and mappings for a HashiCorp Vault secret path.", Args: []ArgInfo{
+				{Name: "--path", Required: true, Description: "Vault logical secret path."},
+			}},
+			{Name: "hashicorp-vault secrets write-field", Description: "Write one field to a HashiCorp Vault secret path.", Args: []ArgInfo{
+				{Name: "--path", Required: true, Description: "Vault logical secret path."},
+				{Name: "--field", Required: true, Description: "Vault field to write."},
+				{Name: "--value", Required: true, Description: "Secret value to write."},
 			}},
 			{Name: "auth login", Description: "Store API key for authentication."},
 			{Name: "auth logout", Description: "Remove stored API key."},

@@ -80,6 +80,7 @@ type RulesCreateCmd struct {
 	AgentID         string `optional:"" name:"agent-id" help:"Agent ID to scope this rule to. Omit for all agents."`
 	RateLimit       *int   `optional:"" name:"rate-limit" help:"Max requests per window (required for rate_limit action)."`
 	RateLimitWindow string `optional:"" name:"rate-limit-window" help:"Time window: 'minute', 'hour', or 'day'."`
+	Conditions      string `optional:"" help:"JSON array of rule conditions."`
 	Enabled         bool   `optional:"" default:"true" help:"Enable rule immediately."`
 	Json            string `optional:"" help:"Raw JSON payload. Overrides individual flags."`
 	DryRun          bool   `optional:"" name:"dry-run" help:"Validate the request without executing it."`
@@ -92,6 +93,10 @@ func (c *RulesCreateCmd) Run(out *output.Writer) error {
 			return fmt.Errorf("invalid JSON payload: %w", err)
 		}
 	} else {
+		conditions, err := parseRuleConditions(c.Conditions)
+		if err != nil {
+			return err
+		}
 		input = api.CreateRuleInput{
 			Name:            c.Name,
 			HostPattern:     c.HostPattern,
@@ -102,6 +107,7 @@ func (c *RulesCreateCmd) Run(out *output.Writer) error {
 			AgentID:         c.AgentID,
 			RateLimit:       c.RateLimit,
 			RateLimitWindow: c.RateLimitWindow,
+			Conditions:      conditions,
 		}
 	}
 
@@ -144,6 +150,7 @@ type RulesUpdateCmd struct {
 	AgentID         string `optional:"" name:"agent-id" help:"New agent ID scope."`
 	RateLimit       *int   `optional:"" name:"rate-limit" help:"New max requests per window."`
 	RateLimitWindow string `optional:"" name:"rate-limit-window" help:"New time window."`
+	Conditions      string `optional:"" help:"JSON array of rule conditions."`
 	Json            string `optional:"" help:"Raw JSON payload. Overrides individual flags."`
 	DryRun          bool   `optional:"" name:"dry-run" help:"Validate the request without executing it."`
 }
@@ -185,6 +192,13 @@ func (c *RulesUpdateCmd) Run(out *output.Writer) error {
 		}
 		if c.RateLimitWindow != "" {
 			input.RateLimitWindow = &c.RateLimitWindow
+		}
+		if c.Conditions != "" {
+			conditions, err := parseRuleConditions(c.Conditions)
+			if err != nil {
+				return err
+			}
+			input.Conditions = conditions
 		}
 	}
 
@@ -274,8 +288,19 @@ func validateRuleInput(hostPattern, pathPattern, method, agentID, action string)
 			return fmt.Errorf("invalid agent-id: %w", err)
 		}
 	}
-	if action != "" && action != "block" && action != "rate_limit" {
-		return fmt.Errorf("invalid action %q: must be 'block' or 'rate_limit'", action)
+	if action != "" && action != "block" && action != "rate_limit" && action != "manual_approval" {
+		return fmt.Errorf("invalid action %q: must be 'block', 'rate_limit', or 'manual_approval'", action)
 	}
 	return nil
+}
+
+func parseRuleConditions(raw string) ([]api.RuleCondition, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var conditions []api.RuleCondition
+	if err := json.Unmarshal([]byte(raw), &conditions); err != nil {
+		return nil, fmt.Errorf("invalid conditions JSON: %w", err)
+	}
+	return conditions, nil
 }
