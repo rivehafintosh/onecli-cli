@@ -177,6 +177,30 @@ func TestProxyURLWithHost(t *testing.T) {
 	}
 }
 
+func TestRewriteProxyEnvHostsUsesGatewayScheme(t *testing.T) {
+	env := map[string]string{
+		"HTTPS_PROXY": "http://x:token@host.docker.internal:10255",
+		"HTTP_PROXY":  "http://x:token@gateway.docker.internal:10255",
+		"https_proxy": "http://x:token@onecli.example.test:10255",
+		"NO_PROXY":    "localhost",
+	}
+
+	rewriteProxyEnvHosts(env, gatewayEndpoint{Scheme: "https", Host: "onecli.example.test"})
+
+	if env["HTTPS_PROXY"] != "https://x:token@onecli.example.test:10255" {
+		t.Errorf("HTTPS_PROXY = %q", env["HTTPS_PROXY"])
+	}
+	if env["HTTP_PROXY"] != "https://x:token@onecli.example.test:10255" {
+		t.Errorf("HTTP_PROXY = %q", env["HTTP_PROXY"])
+	}
+	if env["https_proxy"] != "https://x:token@onecli.example.test:10255" {
+		t.Errorf("https_proxy = %q", env["https_proxy"])
+	}
+	if env["NO_PROXY"] != "localhost" {
+		t.Errorf("NO_PROXY = %q", env["NO_PROXY"])
+	}
+}
+
 func TestPrependPythonPath(t *testing.T) {
 	sep := string(os.PathListSeparator)
 	t.Run("absent appends", func(t *testing.T) {
@@ -264,14 +288,19 @@ func TestHermesSandboxEnv_NoCA(t *testing.T) {
 
 func TestContainerProxyURLFor(t *testing.T) {
 	const server = "http://aoc_tok:x@host.docker.internal:10255"
-	tests := []struct{ name, gatewayHost, want string }{
-		{"loopback 127.0.0.1 → host.docker.internal", "127.0.0.1", "http://aoc_tok:x@host.docker.internal:10255"},
-		{"loopback localhost → host.docker.internal", "localhost", "http://aoc_tok:x@host.docker.internal:10255"},
-		{"routable cloud host kept as-is", "api.onecli.sh", "http://aoc_tok:x@api.onecli.sh:10255"},
+	tests := []struct {
+		name     string
+		endpoint gatewayEndpoint
+		want     string
+	}{
+		{"loopback 127.0.0.1 -> host.docker.internal", gatewayEndpoint{Scheme: "http", Host: "127.0.0.1"}, "http://aoc_tok:x@host.docker.internal:10255"},
+		{"loopback localhost -> host.docker.internal", gatewayEndpoint{Scheme: "http", Host: "localhost"}, "http://aoc_tok:x@host.docker.internal:10255"},
+		{"routable cloud host kept as-is", gatewayEndpoint{Scheme: "http", Host: "api.onecli.sh"}, "http://aoc_tok:x@api.onecli.sh:10255"},
+		{"https scheme is preserved for routed gateway", gatewayEndpoint{Scheme: "https", Host: "api.onecli.sh"}, "https://aoc_tok:x@api.onecli.sh:10255"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := containerProxyURLFor(server, tt.gatewayHost); got != tt.want {
+			if got := containerProxyURLFor(server, tt.endpoint); got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})

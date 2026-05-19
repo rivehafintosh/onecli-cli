@@ -80,18 +80,15 @@ func (c *RunCmd) Run(out *output.Writer) error {
 	// Rewrite proxy URLs for local use. The server returns Docker-internal
 	// hostnames (e.g. host.docker.internal) that don't resolve on the host
 	// machine. Replace with the gateway host reachable from this machine.
-	gatewayHost := c.Gateway
-	if gatewayHost == "" {
-		gatewayHost = resolveLocalGatewayHost()
-	}
+	gatewayEndpoint := resolveLocalGatewayEndpoint(c.Gateway)
 
 	// Derive the proxy URL Hermes' Docker sandbox should use, captured before
 	// rewriteProxyEnvHosts mutates cfg.Env. The sandbox reaches the gateway at
 	// the same host this process resolves it to — except a loopback host, which
 	// a container can't reach and must hit via host.docker.internal.
-	containerProxyURL := containerProxyURLFor(firstProxyURL(cfg.Env), gatewayHost)
+	containerProxyURL := containerProxyURLFor(firstProxyURL(cfg.Env), gatewayEndpoint)
 
-	rewriteProxyEnvHosts(cfg.Env, gatewayHost)
+	rewriteProxyEnvHosts(cfg.Env, gatewayEndpoint)
 
 	// The gateway proxy injects the API key at the HTTP level (x-api-key header).
 	// Keeping it in the env triggers a first-run confirmation prompt in Claude Code.
@@ -339,17 +336,42 @@ var dockerInternalHosts = map[string]bool{
 	"gateway.docker.internal": true,
 }
 
-// resolveLocalGatewayHost derives the gateway hostname from the API host the
-// CLI is configured to talk to. If the API host is localhost/127.0.0.1, the
-// gateway is on the same machine. For remote hosts, use the same hostname
-// (the gateway is typically co-located with the web app).
-func resolveLocalGatewayHost() string {
+type gatewayEndpoint struct {
+	Scheme string
+	Host   string
+}
+
+// resolveLocalGatewayEndpoint derives the gateway endpoint from the API host the
+// CLI is configured to talk to. If the API is exposed over HTTPS, the gateway is
+// usually exposed behind the same TLS terminator, so proxy URLs must use https.
+func resolveLocalGatewayEndpoint(override string) gatewayEndpoint {
+	apiScheme := "http"
 	apiHost := config.APIHost()
 	u, err := url.Parse(apiHost)
-	if err != nil || u.Hostname() == "" {
-		return "127.0.0.1"
+	if err == nil {
+		if u.Scheme == "https" {
+			apiScheme = "https"
+		}
 	}
-	return u.Hostname()
+
+	if override != "" {
+		if strings.Contains(override, "://") {
+			u, err := url.Parse(override)
+			if err == nil && u.Host != "" {
+				scheme := u.Scheme
+				if scheme == "" {
+					scheme = apiScheme
+				}
+				return gatewayEndpoint{Scheme: scheme, Host: u.Host}
+			}
+		}
+		return gatewayEndpoint{Scheme: apiScheme, Host: override}
+	}
+
+	if err != nil || u.Hostname() == "" {
+		return gatewayEndpoint{Scheme: apiScheme, Host: "127.0.0.1"}
+	}
+	return gatewayEndpoint{Scheme: apiScheme, Host: u.Hostname()}
 }
 
 // containerHomeEnv maps env vars that the server returns as container-internal
@@ -378,18 +400,39 @@ func rewriteContainerHomeEnv(env map[string]string, home string) {
 }
 
 // rewriteProxyEnvHosts replaces Docker-internal hostnames in proxy URL values
-// with the given local host, keeping the port and credentials intact.
+// with the given gateway endpoint, keeping the port and credentials intact.
 // Only rewrites values that look like proxy URLs (contain "://").
-func rewriteProxyEnvHosts(env map[string]string, localHost string) {
+func rewriteProxyEnvHosts(env map[string]string, endpoint gatewayEndpoint) {
 	for k, v := range env {
 		if !slices.Contains(proxyEnvKeys, k) {
 			continue
 		}
 		u, err := url.Parse(v)
-		if err != nil || !dockerInternalHosts[u.Hostname()] {
+		if err != nil {
 			continue
 		}
-		env[k] = proxyURLWithHost(v, localHost)
+		if endpoint.Scheme != "" {
+			u.Scheme = endpoint.Scheme
+		}
+		if !dockerInternalHosts[u.Hostname()] {
+			env[k] = u.String()
+			continue
+		}
+		port := u.Port()
+		host := endpoint.Host
+		if parsed, err := url.Parse(endpoint.Host); err == nil && parsed.Host != "" {
+			host = parsed.Host
+		}
+		if port != "" {
+			if strings.Contains(host, ":") {
+				u.Host = host
+			} else {
+				u.Host = host + ":" + port
+			}
+		} else {
+			u.Host = host
+		}
+		env[k] = u.String()
 	}
 }
 
@@ -404,14 +447,20 @@ func isLoopbackHost(h string) bool {
 }
 
 // containerProxyURLFor returns the proxy URL Hermes' Docker sandbox should use
-// to reach the gateway. The gateway lives at gatewayHost (where this process
+// to reach the gateway. The gateway lives at endpoint.Host (where this process
 // reaches it): a container reaches a routable host directly, but a loopback
 // host must be reached via host.docker.internal (paired with --add-host on
 // Linux). serverProxy supplies the scheme, credentials, and port.
-func containerProxyURLFor(serverProxy, gatewayHost string) string {
-	host := gatewayHost
+func containerProxyURLFor(serverProxy string, endpoint gatewayEndpoint) string {
+	host := endpoint.Host
 	if isLoopbackHost(host) {
 		host = "host.docker.internal"
+	}
+	if endpoint.Scheme != "" {
+		if u, err := url.Parse(serverProxy); err == nil {
+			u.Scheme = endpoint.Scheme
+			serverProxy = u.String()
+		}
 	}
 	return proxyURLWithHost(serverProxy, host)
 }
