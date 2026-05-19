@@ -143,6 +143,30 @@ func TestAgentSkillDir(t *testing.T) {
 	}
 }
 
+func TestRewriteProxyEnvHostsUsesGatewayScheme(t *testing.T) {
+	env := map[string]string{
+		"HTTPS_PROXY": "http://x:token@host.docker.internal:10255",
+		"HTTP_PROXY":  "http://x:token@gateway.docker.internal:10255",
+		"https_proxy": "http://x:token@onecli.example.test:10255",
+		"NO_PROXY":    "localhost",
+	}
+
+	rewriteProxyEnvHosts(env, gatewayEndpoint{Scheme: "https", Host: "onecli.example.test"})
+
+	if env["HTTPS_PROXY"] != "https://x:token@onecli.example.test:10255" {
+		t.Errorf("HTTPS_PROXY = %q", env["HTTPS_PROXY"])
+	}
+	if env["HTTP_PROXY"] != "https://x:token@onecli.example.test:10255" {
+		t.Errorf("HTTP_PROXY = %q", env["HTTP_PROXY"])
+	}
+	if env["https_proxy"] != "https://x:token@onecli.example.test:10255" {
+		t.Errorf("https_proxy = %q", env["https_proxy"])
+	}
+	if env["NO_PROXY"] != "localhost" {
+		t.Errorf("NO_PROXY = %q", env["NO_PROXY"])
+	}
+}
+
 func TestVscodeSettingsPath(t *testing.T) {
 	path := vscodeSettingsPath("TestApp")
 	switch runtime.GOOS {
