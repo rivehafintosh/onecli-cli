@@ -45,7 +45,7 @@ type WriteVaultFieldsInput struct {
 
 // ListVaultMappings returns configured HashiCorp Vault hostname mappings.
 func (c *Client) ListVaultMappings(ctx context.Context, projectID string) ([]VaultMapping, error) {
-	path := withProjectQuery("/api/hashicorp-vault/mappings", projectID)
+	path := withProjectQuery("/v1/hashicorp-vault/mappings", projectID)
 	var mappings []VaultMapping
 	if err := c.do(ctx, http.MethodGet, path, nil, &mappings); err != nil {
 		return nil, fmt.Errorf("listing HashiCorp Vault mappings: %w", err)
@@ -55,7 +55,7 @@ func (c *Client) ListVaultMappings(ctx context.Context, projectID string) ([]Vau
 
 // UpsertVaultMapping creates or updates a HashiCorp Vault hostname mapping.
 func (c *Client) UpsertVaultMapping(ctx context.Context, projectID string, input UpsertVaultMappingInput) ([]VaultMapping, error) {
-	path := withProjectQuery("/api/hashicorp-vault/mappings", projectID)
+	path := withProjectQuery("/v1/hashicorp-vault/mappings", projectID)
 	var mappings []VaultMapping
 	if err := c.do(ctx, http.MethodPut, path, input, &mappings); err != nil {
 		return nil, fmt.Errorf("saving HashiCorp Vault mapping: %w", err)
@@ -65,7 +65,7 @@ func (c *Client) UpsertVaultMapping(ctx context.Context, projectID string, input
 
 // DeleteVaultMapping removes a HashiCorp Vault hostname mapping.
 func (c *Client) DeleteVaultMapping(ctx context.Context, projectID string, input UpsertVaultMappingInput) ([]VaultMapping, error) {
-	path := withProjectQuery("/api/hashicorp-vault/mappings", projectID)
+	path := withProjectQuery("/v1/hashicorp-vault/mappings", projectID)
 	var mappings []VaultMapping
 	if err := c.do(ctx, http.MethodDelete, path, input, &mappings); err != nil {
 		return nil, fmt.Errorf("deleting HashiCorp Vault mapping: %w", err)
@@ -81,7 +81,7 @@ func (c *Client) ListVaultPath(ctx context.Context, projectID, vaultPath string)
 		q.Set("projectId", projectID)
 	}
 	var entries []VaultPathEntry
-	if err := c.do(ctx, http.MethodGet, "/api/hashicorp-vault/paths?"+q.Encode(), nil, &entries); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/v1/hashicorp-vault/paths?"+q.Encode(), nil, &entries); err != nil {
 		return nil, fmt.Errorf("listing HashiCorp Vault path: %w", err)
 	}
 	return entries, nil
@@ -95,7 +95,7 @@ func (c *Client) GetVaultSecretMetadata(ctx context.Context, projectID, vaultPat
 		q.Set("projectId", projectID)
 	}
 	var metadata VaultSecretMetadata
-	if err := c.do(ctx, http.MethodGet, "/api/hashicorp-vault/secrets/metadata?"+q.Encode(), nil, &metadata); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/v1/hashicorp-vault/secrets/metadata?"+q.Encode(), nil, &metadata); err != nil {
 		return nil, fmt.Errorf("getting HashiCorp Vault secret metadata: %w", err)
 	}
 	return &metadata, nil
@@ -103,7 +103,7 @@ func (c *Client) GetVaultSecretMetadata(ctx context.Context, projectID, vaultPat
 
 // WriteVaultFields writes one or more fields to a Vault KV path.
 func (c *Client) WriteVaultFields(ctx context.Context, projectID string, input WriteVaultFieldsInput) (*VaultSecretMetadata, error) {
-	path := withProjectQuery("/api/hashicorp-vault/secrets/fields", projectID)
+	path := withProjectQuery("/v1/hashicorp-vault/secrets/fields", projectID)
 	var metadata VaultSecretMetadata
 	if err := c.do(ctx, http.MethodPost, path, input, &metadata); err != nil {
 		return nil, fmt.Errorf("writing HashiCorp Vault secret fields: %w", err)

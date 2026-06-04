@@ -13,8 +13,8 @@ func TestListVaultMappings(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Errorf("method = %q, want GET", r.Method)
 		}
-		if r.URL.Path != "/api/hashicorp-vault/mappings" {
-			t.Errorf("path = %q, want /api/hashicorp-vault/mappings", r.URL.Path)
+		if r.URL.Path != "/v1/hashicorp-vault/mappings" {
+			t.Errorf("path = %q, want /v1/hashicorp-vault/mappings", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode([]VaultMapping{
@@ -23,7 +23,7 @@ func TestListVaultMappings(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, "oc_test")
+	client := newWithPrefix(srv.URL, "oc_test", "/v1")
 	mappings, err := client.ListVaultMappings(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -39,8 +39,8 @@ func TestUpsertVaultMapping(t *testing.T) {
 		if r.Method != http.MethodPut {
 			t.Errorf("method = %q, want PUT", r.Method)
 		}
-		if r.URL.Path != "/api/hashicorp-vault/mappings" {
-			t.Errorf("path = %q, want /api/hashicorp-vault/mappings", r.URL.Path)
+		if r.URL.Path != "/v1/hashicorp-vault/mappings" {
+			t.Errorf("path = %q, want /v1/hashicorp-vault/mappings", r.URL.Path)
 		}
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
@@ -50,7 +50,7 @@ func TestUpsertVaultMapping(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, "oc_test")
+	client := newWithPrefix(srv.URL, "oc_test", "/v1")
 	mappings, err := client.UpsertVaultMapping(
 		context.Background(),
 		"",
@@ -70,8 +70,8 @@ func TestUpsertVaultMapping(t *testing.T) {
 
 func TestListVaultPathEncodesQuery(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/hashicorp-vault/paths" {
-			t.Errorf("path = %q, want /api/hashicorp-vault/paths", r.URL.Path)
+		if r.URL.Path != "/v1/hashicorp-vault/paths" {
+			t.Errorf("path = %q, want /v1/hashicorp-vault/paths", r.URL.Path)
 		}
 		if got := r.URL.Query().Get("path"); got != "onecli/openai" {
 			t.Errorf("path query = %q, want onecli/openai", got)
@@ -83,7 +83,7 @@ func TestListVaultPathEncodesQuery(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, "oc_test")
+	client := newWithPrefix(srv.URL, "oc_test", "/v1")
 	entries, err := client.ListVaultPath(context.Background(), "", "onecli/openai")
 	if err != nil {
 		t.Fatal(err)
@@ -99,8 +99,8 @@ func TestWriteVaultFields(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %q, want POST", r.Method)
 		}
-		if r.URL.Path != "/api/hashicorp-vault/secrets/fields" {
-			t.Errorf("path = %q, want /api/hashicorp-vault/secrets/fields", r.URL.Path)
+		if r.URL.Path != "/v1/hashicorp-vault/secrets/fields" {
+			t.Errorf("path = %q, want /v1/hashicorp-vault/secrets/fields", r.URL.Path)
 		}
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
@@ -111,7 +111,7 @@ func TestWriteVaultFields(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, "oc_test")
+	client := newWithPrefix(srv.URL, "oc_test", "/v1")
 	metadata, err := client.WriteVaultFields(
 		context.Background(),
 		"",
