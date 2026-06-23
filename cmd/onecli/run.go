@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -19,6 +20,8 @@ import (
 	"github.com/onecli/onecli-cli/internal/config"
 	"github.com/onecli/onecli-cli/pkg/output"
 	"github.com/onecli/onecli-cli/pkg/validate"
+
+	"gopkg.in/yaml.v3"
 )
 
 //go:embed skill_gateway_fallback.md
@@ -26,6 +29,15 @@ var gatewaySkillFallback string
 
 //go:embed hook_gateway_detect.sh
 var gatewayDetectHook string
+
+//go:embed plugin_gateway_hermes.yaml
+var hermesPluginManifest string
+
+//go:embed plugin_gateway_hermes.py
+var hermesPluginHandler string
+
+//go:embed sitecustomize_onecli_ca.py
+var caShimSource string
 
 // RunCmd is `onecli run -- <command> [args...]`.
 type RunCmd struct {
@@ -72,6 +84,13 @@ func (c *RunCmd) Run(out *output.Writer) error {
 	if gatewayHost == "" {
 		gatewayHost = resolveLocalGatewayHost()
 	}
+
+	// Derive the proxy URL Hermes' Docker sandbox should use, captured before
+	// rewriteProxyEnvHosts mutates cfg.Env. The sandbox reaches the gateway at
+	// the same host this process resolves it to — except a loopback host, which
+	// a container can't reach and must hit via host.docker.internal.
+	containerProxyURL := containerProxyURLFor(firstProxyURL(cfg.Env), gatewayHost)
+
 	rewriteProxyEnvHosts(cfg.Env, gatewayHost)
 
 	// The gateway proxy injects the API key at the HTTP level (x-api-key header).
@@ -123,36 +142,48 @@ func (c *RunCmd) Run(out *output.Writer) error {
 	// For known agents, fetch the agent-specific skill variant and install
 	// to the agent's skill directory. Also optionally register a hook.
 	agentFramework := strings.ToLower(filepath.Base(c.Args[0]))
-	if name, dir, cfgDir, noHook, _, nativeProxy, ok := agentSkillDir(c.Args[0]); ok {
+	if a, ok := agentSkillDir(c.Args[0]); ok {
 		skillContent := gatewaySkillFallback
-		if fetched, err := client.GetGatewaySkill(newContext()); err == nil && fetched != "" {
+		if fetched, err := client.GetGatewaySkill(newContext(), agentFramework); err == nil && fetched != "" {
 			skillContent = fetched
 		}
-		maybeInstallGatewaySkill(out, name, dir, skillContent)
-		if !noHook {
-			maybeInstallGatewayHook(out, name, dir)
+		maybeInstallGatewaySkill(out, a.agentName, a.baseDir, skillContent)
+		if !a.skipHook {
+			maybeInstallGatewayHook(out, a.agentName, a.baseDir)
+		}
+		if a.pluginGateway {
+			maybeInstallGatewayPlugin(out, a.agentName, a.baseDir)
 		}
 
 		// Electron-based agents (e.g. Cursor) ignore embedded user:pass in
 		// HTTPS_PROXY and show a native auth dialog. Inject proxy credentials
 		// into the app's VS Code-style settings.json instead.
-		if cfgDir != "" {
-			env = injectElectronProxySettings(out, env, cfgDir, caPath)
+		if a.configDir != "" {
+			env = injectElectronProxySettings(out, env, a.configDir, caPath)
 		}
 
 		// Agents with a native proxy config (e.g. Codex) need proxy_url
 		// written to their TOML config and CODEX_CA_CERTIFICATE set.
-		if nativeProxy != "" {
-			maybeInjectNativeProxyConfig(out, name, nativeProxy, env, caPath)
+		if a.nativeProxyConfig != "" {
+			maybeInjectNativeProxyConfig(out, a.agentName, a.nativeProxyConfig, env, caPath)
 		}
 		if agentFramework == "codex" {
 			maybeCreateCodexAuthStub(out, client)
+		}
+
+		// Agents that run tools in a Docker sandbox (e.g. Hermes) don't inherit
+		// this process's proxy/CA env. Configure the sandbox via Hermes'
+		// TERMINAL_DOCKER_* env overrides, make the gateway CA trusted by
+		// certifi-pinned Python clients (httplib2) via a sitecustomize shim,
+		// and route — and thereby govern — the agent's own inference traffic.
+		if a.dockerSandbox {
+			env = applyHermesGateway(out, env, a.baseDir, caPath, containerProxyURL)
 		}
 	} else {
 		// Unknown agent — install the skill to ~/.onecli/skills/ so the
 		// framework can discover it via ONECLI_GATEWAY_SKILL_PATH.
 		skillContent := gatewaySkillFallback
-		if fetched, err := client.GetGatewaySkill(newContext()); err == nil && fetched != "" {
+		if fetched, err := client.GetGatewaySkill(newContext(), agentFramework); err == nil && fetched != "" {
 			skillContent = fetched
 		}
 		if p := installUniversalGatewaySkill(out, skillContent); p != "" {
@@ -298,6 +329,9 @@ func buildChildEnv(current []string, serverEnv map[string]string, caPath string)
 	return out
 }
 
+// proxyEnvKeys are the proxy URL env vars (both casings) the gateway sets.
+var proxyEnvKeys = []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"}
+
 // dockerInternalHosts is the set of hostnames used inside Docker containers to
 // reach the host machine. These don't resolve from a local process.
 var dockerInternalHosts = map[string]bool{
@@ -347,60 +381,76 @@ func rewriteContainerHomeEnv(env map[string]string, home string) {
 // with the given local host, keeping the port and credentials intact.
 // Only rewrites values that look like proxy URLs (contain "://").
 func rewriteProxyEnvHosts(env map[string]string, localHost string) {
-	proxyKeys := map[string]bool{
-		"HTTPS_PROXY": true, "HTTP_PROXY": true,
-		"https_proxy": true, "http_proxy": true,
-	}
 	for k, v := range env {
-		if !proxyKeys[k] {
+		if !slices.Contains(proxyEnvKeys, k) {
 			continue
 		}
 		u, err := url.Parse(v)
-		if err != nil {
+		if err != nil || !dockerInternalHosts[u.Hostname()] {
 			continue
 		}
-		if !dockerInternalHosts[u.Hostname()] {
-			continue
-		}
-		port := u.Port()
-		if port != "" {
-			u.Host = localHost + ":" + port
-		} else {
-			u.Host = localHost
-		}
-		env[k] = u.String()
+		env[k] = proxyURLWithHost(v, localHost)
 	}
 }
 
-// supportedAgents maps CLI binary base-names to (agentName, skillsBaseDir) pairs.
-var supportedAgents = []struct {
-	bases             []string
-	agentName         string
-	baseDir           string
-	configDir         string // VS Code-style config dir name; non-empty enables proxy settings injection.
-	skipHook          bool   // true for agents that don't support Claude Code-style hooks.
-	hasPlugin         bool   // true for agents that support a transform_tool_result plugin.
-	nativeProxyConfig string // home-relative dir containing a TOML config that needs proxy_url injection (e.g. ".codex").
-}{
-	{[]string{"claude"}, "Claude Code", ".claude", "", false, false, ""},
-	{[]string{"cursor", "agent"}, "Cursor", ".cursor", "Cursor", false, false, ""},
-	{[]string{"codex"}, "Codex", ".agents", "", false, false, ".codex"},
-	{[]string{"hermes"}, "Hermes", ".hermes", "", true, true, ""},
-	{[]string{"opencode"}, "OpenCode", ".opencode", "", false, false, ""},
+// isLoopbackHost reports whether h is a loopback host a Docker container cannot
+// reach directly (so it must go through host.docker.internal instead).
+func isLoopbackHost(h string) bool {
+	switch strings.ToLower(h) {
+	case "localhost", "127.0.0.1", "::1", "[::1]":
+		return true
+	}
+	return false
 }
 
-// agentSkillDir returns the display name, skills base directory, and config
-// options for a known agent command, or ok=false if the command is not recognized.
-func agentSkillDir(cmd string) (agentName, baseDir, configDir string, skipHook bool, hasPlugin bool, nativeProxyConfig string, ok bool) {
+// containerProxyURLFor returns the proxy URL Hermes' Docker sandbox should use
+// to reach the gateway. The gateway lives at gatewayHost (where this process
+// reaches it): a container reaches a routable host directly, but a loopback
+// host must be reached via host.docker.internal (paired with --add-host on
+// Linux). serverProxy supplies the scheme, credentials, and port.
+func containerProxyURLFor(serverProxy, gatewayHost string) string {
+	host := gatewayHost
+	if isLoopbackHost(host) {
+		host = "host.docker.internal"
+	}
+	return proxyURLWithHost(serverProxy, host)
+}
+
+// agentSpec describes how `onecli run` integrates a known coding agent with the
+// gateway: where its skill/hook/plugin files live and which injection
+// strategies it needs.
+type agentSpec struct {
+	agentName         string
+	baseDir           string // home-relative config dir (skills/hooks/plugins live here)
+	configDir         string // VS Code-style app dir name; non-empty enables Electron proxy-settings injection.
+	skipHook          bool   // true for agents that don't support Claude Code-style UserPromptSubmit hooks.
+	pluginGateway     bool   // true for agents that load the transform_tool_result recovery plugin (e.g. Hermes).
+	dockerSandbox     bool   // true for agents that run tools in a Docker sandbox needing TERMINAL_DOCKER_* injection.
+	nativeProxyConfig string // home-relative dir with a TOML config needing proxy_url injection (e.g. ".codex").
+}
+
+// supportedAgents maps CLI binary base-names to their gateway integration spec.
+var supportedAgents = []struct {
+	bases []string
+	spec  agentSpec
+}{
+	{[]string{"claude"}, agentSpec{agentName: "Claude Code", baseDir: ".claude"}},
+	{[]string{"cursor", "agent"}, agentSpec{agentName: "Cursor", baseDir: ".cursor", configDir: "Cursor"}},
+	{[]string{"codex"}, agentSpec{agentName: "Codex", baseDir: ".agents", nativeProxyConfig: ".codex"}},
+	{[]string{"hermes"}, agentSpec{agentName: "Hermes", baseDir: ".hermes", skipHook: true, pluginGateway: true, dockerSandbox: true}},
+	{[]string{"opencode"}, agentSpec{agentName: "OpenCode", baseDir: ".opencode"}},
+}
+
+// agentSkillDir returns the integration spec for a known agent command, or
+// ok=false if the command is not recognized.
+func agentSkillDir(cmd string) (agentSpec, bool) {
 	base := filepath.Base(cmd)
 	for _, a := range supportedAgents {
-		for _, b := range a.bases {
-			if base == b {
-				return a.agentName, a.baseDir, a.configDir, a.skipHook, a.hasPlugin, a.nativeProxyConfig, true
-			}
+		if slices.Contains(a.bases, base) {
+			return a.spec, true
 		}
 	}
-	return "", "", "", false, false, "", false
+	return agentSpec{}, false
 }
 
 // maybeInstallGatewaySkill installs the OneCLI gateway skill file if it is
@@ -541,6 +591,370 @@ func maybeInjectNativeProxyConfig(out *output.Writer, agentName, configRelDir st
 	}
 }
 
+// maybeInstallGatewayPlugin installs the Hermes transform_tool_result recovery
+// plugin and enables it in ~/.hermes/config.yaml. The plugin runs in the agent
+// process and appends gateway recovery guidance to any tool result that looks
+// like an auth error, so the agent creates a credential stub instead of
+// following a manual OAuth/API-key setup flow.
+func maybeInstallGatewayPlugin(out *output.Writer, agentName, baseDir string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	pluginDir := filepath.Join(home, baseDir, "plugins", "onecli-gateway")
+
+	wroteManifest := writeIfChanged(out, filepath.Join(pluginDir, "plugin.yaml"), hermesPluginManifest)
+	wroteHandler := writeIfChanged(out, filepath.Join(pluginDir, "__init__.py"), hermesPluginHandler)
+	if wroteManifest || wroteHandler {
+		out.Stderr(fmt.Sprintf("onecli: installed gateway plugin for %s.", agentName))
+	}
+
+	// Plugins are opt-in: a plugin only loads if listed under plugins.enabled
+	// in config.yaml. Edit the file via a YAML round-trip so other settings and
+	// comments are preserved (no fragile string surgery).
+	configPath := filepath.Join(home, baseDir, "config.yaml")
+	if changed, err := enableHermesPlugin(configPath, "onecli-gateway"); err != nil {
+		out.Stderr(fmt.Sprintf("onecli: warning: could not enable gateway plugin: %v", err))
+	} else if changed {
+		out.Stderr(fmt.Sprintf("onecli: enabled gateway plugin in %s config.", agentName))
+	}
+}
+
+// applyHermesGateway makes the gateway reach where Hermes actually sends
+// traffic. Hermes runs its own LLM/inference on this host (httpx, which honors
+// HTTPS_PROXY + SSL_CERT_FILE — already set by buildChildEnv), but runs *tools*
+// in a separate Docker sandbox that inherits none of this process's env. It
+// returns env extended with: (1) a CA-trust shim for certifi-pinned Python
+// clients (httplib2 → Google Workspace), and (2) Hermes' TERMINAL_DOCKER_*
+// overrides that push the proxy + CA + shim into the sandbox container (no
+// config-file mutation; inert when terminal.backend != docker).
+func applyHermesGateway(out *output.Writer, env []string, baseDir, caPath, containerProxyURL string) []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return env
+	}
+	cfg := readHermesConfig(filepath.Join(home, baseDir, "config.yaml"))
+
+	// Host side: Hermes' inference (httpx) already trusts the gateway CA via
+	// SSL_CERT_FILE. Add HERMES_CA_BUNDLE (Hermes' native CA knob) and a
+	// sitecustomize shim so certifi-pinned clients (httplib2) trust it too —
+	// this also covers Google Workspace when terminal.backend is "local".
+	shimDir := ""
+	if caPath != "" {
+		env = append(env, "HERMES_CA_BUNDLE="+caPath, "ONECLI_CA_BUNDLE="+caPath)
+		if shimDir = installCAShim(out); shimDir != "" {
+			env = prependPythonPath(env, shimDir)
+		}
+	}
+
+	// Inference governance: Hermes' model calls flow through the gateway, so
+	// OneCLI sees and can police them. Make that visible.
+	out.Stderr("onecli: Hermes inference is routed through the OneCLI gateway; " +
+		"under a deny-by-default policy, allow your model-provider host in OneCLI rules.")
+
+	// Sandbox side: route Hermes' Docker tool-sandbox through the gateway via
+	// env-var overrides (merged with the user's config in hermesSandboxEnv).
+	return append(env, hermesSandboxEnv(cfg, caPath, shimDir, containerProxyURL)...)
+}
+
+// hermesSandboxEnv returns the TERMINAL_DOCKER_* env overrides that route
+// Hermes' Docker tool-sandbox through the gateway, merged with any docker_env /
+// docker_volumes / docker_extra_args already in the user's config. It performs
+// no I/O so it can be unit-tested. Disabling cross-process container reuse
+// forces a fresh container that picks up the proxy + CA (Hermes reuses by label
+// and ignores env/mount changes; on-disk filesystem persistence is unaffected).
+func hermesSandboxEnv(cfg hermesConfig, caPath, shimDir, containerProxyURL string) []string {
+	const containerCA = "/etc/ssl/onecli-ca.pem"
+	const containerShim = "/opt/onecli-pyca"
+
+	dockerEnv := map[string]string{"ONECLI_GATEWAY": "true"}
+	for k, v := range cfg.Terminal.DockerEnv {
+		dockerEnv[k] = fmt.Sprint(v)
+	}
+	if containerProxyURL != "" {
+		for _, k := range proxyEnvKeys {
+			dockerEnv[k] = containerProxyURL
+		}
+	}
+	if caPath != "" {
+		for _, k := range []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO", "ONECLI_CA_BUNDLE"} {
+			dockerEnv[k] = containerCA
+		}
+	}
+	// Prepend the CA shim to PYTHONPATH (container path separator is always ":"),
+	// preserving any PYTHONPATH the user set in docker_env. Only when the shim is
+	// actually mounted (shimDir != "") — otherwise the path wouldn't exist.
+	if shimDir != "" {
+		if existing := dockerEnv["PYTHONPATH"]; existing != "" {
+			dockerEnv["PYTHONPATH"] = containerShim + ":" + existing
+		} else {
+			dockerEnv["PYTHONPATH"] = containerShim
+		}
+	}
+
+	volumes := append([]string{}, cfg.Terminal.DockerVolumes...)
+	if caPath != "" {
+		if caVol := caPath + ":" + containerCA + ":ro"; !slices.Contains(volumes, caVol) {
+			volumes = append(volumes, caVol)
+		}
+		if shimDir != "" {
+			if shimVol := shimDir + ":" + containerShim + ":ro"; !slices.Contains(volumes, shimVol) {
+				volumes = append(volumes, shimVol)
+			}
+		}
+	}
+
+	// --add-host is only needed when the sandbox reaches the gateway via
+	// host.docker.internal (Linux doesn't resolve that name automatically).
+	// For a routable gateway host the container connects directly, so skip it.
+	extraArgs := append([]string{}, cfg.Terminal.DockerExtraArgs...)
+	if runtime.GOOS == "linux" && proxyURLHostname(containerProxyURL) == "host.docker.internal" &&
+		!slices.Contains(extraArgs, "host.docker.internal:host-gateway") {
+		extraArgs = append(extraArgs, "--add-host", "host.docker.internal:host-gateway")
+	}
+
+	var out []string
+	if b, err := json.Marshal(dockerEnv); err == nil {
+		out = append(out, "TERMINAL_DOCKER_ENV="+string(b))
+	}
+	if b, err := json.Marshal(volumes); err == nil {
+		out = append(out, "TERMINAL_DOCKER_VOLUMES="+string(b))
+	}
+	if b, err := json.Marshal(extraArgs); err == nil {
+		out = append(out, "TERMINAL_DOCKER_EXTRA_ARGS="+string(b))
+	}
+	return append(out, "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES=false")
+}
+
+// hermesConfig is the subset of ~/.hermes/config.yaml we read (best-effort) to
+// merge sandbox settings without clobbering the user's.
+type hermesConfig struct {
+	Terminal struct {
+		DockerEnv       map[string]any `yaml:"docker_env"`
+		DockerVolumes   []string       `yaml:"docker_volumes"`
+		DockerExtraArgs []string       `yaml:"docker_extra_args"`
+	} `yaml:"terminal"`
+}
+
+func readHermesConfig(configPath string) hermesConfig {
+	var cfg hermesConfig
+	if data, err := os.ReadFile(configPath); err == nil {
+		_ = yaml.Unmarshal(data, &cfg) // best-effort; absent keys stay zero
+	}
+	return cfg
+}
+
+// enableHermesPlugin adds name to plugins.enabled in a Hermes config.yaml,
+// preserving the rest of the document (keys, order, comments) via a yaml.Node
+// round-trip. Returns whether the file was changed.
+func enableHermesPlugin(configPath, name string) (bool, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	if os.IsNotExist(err) || len(bytes.TrimSpace(data)) == 0 {
+		// Hermes deep-merges defaults at load, so a minimal file is sufficient.
+		if err := os.MkdirAll(filepath.Dir(configPath), 0o750); err != nil {
+			return false, err
+		}
+		content := "plugins:\n  enabled:\n    - " + name + "\n"
+		if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return false, fmt.Errorf("parsing config.yaml: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return false, fmt.Errorf("unexpected config.yaml structure")
+	}
+	root := doc.Content[0]
+
+	// Duplicate top-level keys are ambiguous: yaml.v3 keeps both, but Hermes'
+	// loader is last-key-wins — editing the first block would silently fail to
+	// enable the plugin. Refuse rather than report a false success.
+	if yamlMapCount(root, "plugins") > 1 {
+		return false, fmt.Errorf("config.yaml has duplicate top-level 'plugins' keys; enable onecli-gateway manually")
+	}
+
+	plugins := yamlMapGet(root, "plugins")
+	if plugins == nil || plugins.Kind != yaml.MappingNode {
+		plugins = &yaml.Node{Kind: yaml.MappingNode}
+		yamlMapSet(root, "plugins", plugins)
+	} else if yamlMapCount(plugins, "enabled") > 1 {
+		return false, fmt.Errorf("config.yaml has duplicate 'plugins.enabled' keys; enable onecli-gateway manually")
+	}
+
+	enabled := yamlMapGet(plugins, "enabled")
+	switch {
+	case enabled == nil:
+		enabled = &yaml.Node{Kind: yaml.SequenceNode}
+		yamlMapSet(plugins, "enabled", enabled)
+	case enabled.Kind == yaml.ScalarNode && enabled.Value != "" && enabled.Tag != "!!null":
+		// Single-scalar form (`enabled: foo`): promote to a sequence, keeping
+		// the user's existing value instead of dropping it. Explicit nulls
+		// (`enabled: null` / `~`) are tagged !!null with a non-empty Value, so
+		// they're excluded here and fall through to the fresh-sequence case.
+		kept := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: enabled.Value}
+		enabled = &yaml.Node{Kind: yaml.SequenceNode, Content: []*yaml.Node{kept}}
+		yamlMapSet(plugins, "enabled", enabled)
+	case enabled.Kind != yaml.SequenceNode:
+		// null / mapping / other — replace with a fresh sequence.
+		enabled = &yaml.Node{Kind: yaml.SequenceNode}
+		yamlMapSet(plugins, "enabled", enabled)
+	}
+	for _, item := range enabled.Content {
+		if item.Value == name {
+			return false, nil
+		}
+	}
+	enabled.Content = append(enabled.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name})
+
+	encoded, err := yaml.Marshal(&doc)
+	if err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(configPath, encoded, 0o600); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// yamlMapGet returns the value node for key in a YAML mapping node, or nil.
+func yamlMapGet(m *yaml.Node, key string) *yaml.Node {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return m.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// yamlMapCount returns how many times key appears in a YAML mapping node.
+func yamlMapCount(m *yaml.Node, key string) int {
+	n := 0
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			n++
+		}
+	}
+	return n
+}
+
+// yamlMapSet sets key=val in a YAML mapping node, appending if absent.
+func yamlMapSet(m *yaml.Node, key string, val *yaml.Node) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content[i+1] = val
+			return
+		}
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, val)
+}
+
+// installCAShim writes the embedded sitecustomize CA shim to ~/.onecli/pyca/
+// and returns that directory (mountable into the sandbox), or "" on failure.
+func installCAShim(out *output.Writer) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(home, ".onecli", "pyca")
+	path := filepath.Join(dir, "sitecustomize.py")
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, []byte(caShimSource)) {
+		return dir
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		out.Stderr(fmt.Sprintf("onecli: warning: could not create CA shim dir: %v", err))
+		return ""
+	}
+	if err := os.WriteFile(path, []byte(caShimSource), 0o644); err != nil {
+		out.Stderr(fmt.Sprintf("onecli: warning: could not write CA shim: %v", err))
+		return ""
+	}
+	return dir
+}
+
+// writeIfChanged writes content to path (creating parent dirs) unless the file
+// already holds exactly content. Returns whether it wrote.
+func writeIfChanged(out *output.Writer, path, content string) bool {
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, []byte(content)) {
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		out.Stderr(fmt.Sprintf("onecli: warning: could not create %s: %v", filepath.Dir(path), err))
+		return false
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		out.Stderr(fmt.Sprintf("onecli: warning: could not write %s: %v", path, err))
+		return false
+	}
+	return true
+}
+
+// firstProxyURL returns the first proxy URL set in env (any casing), or "".
+func firstProxyURL(env map[string]string) string {
+	for _, k := range proxyEnvKeys {
+		if v := env[k]; v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// proxyURLWithHost rewrites the host of a proxy URL, preserving scheme,
+// credentials, and port. Returns "" for empty input.
+func proxyURLWithHost(raw, host string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	if p := u.Port(); p != "" {
+		u.Host = host + ":" + p
+	} else {
+		u.Host = host
+	}
+	return u.String()
+}
+
+// proxyURLHostname returns the hostname of a proxy URL, or "".
+func proxyURLHostname(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if u, err := url.Parse(raw); err == nil {
+		return u.Hostname()
+	}
+	return ""
+}
+
+// prependPythonPath ensures dir is the first entry on PYTHONPATH in env,
+// comparing whole path elements (not substrings) so a prefix collision doesn't
+// wrongly suppress it.
+func prependPythonPath(env []string, dir string) []string {
+	const key = "PYTHONPATH="
+	sep := string(os.PathListSeparator)
+	for i, kv := range env {
+		if strings.HasPrefix(kv, key) {
+			switch existing := kv[len(key):]; {
+			case existing == "":
+				env[i] = key + dir
+			case !slices.Contains(strings.Split(existing, sep), dir):
+				env[i] = key + dir + sep + existing
+			}
+			return env
+		}
+	}
+	return append(env, key+dir)
+}
+
 // maybeInstallGatewayHook installs the gateway detection hook script and
 // registers it in the agent's settings.json so the agent knows the gateway
 // is active without needing to run any visible checks.
@@ -667,7 +1081,7 @@ func injectElectronProxySettings(out *output.Writer, env []string, configDir str
 }
 
 func findProxyURL(env []string) string {
-	for _, key := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"} {
+	for _, key := range proxyEnvKeys {
 		prefix := key + "="
 		for _, kv := range env {
 			if strings.HasPrefix(kv, prefix) {
@@ -736,14 +1150,10 @@ func mergeVSCodeProxySettings(path, proxyURL, authHeader string, terminalEnv map
 }
 
 func stripProxyCredentials(env []string) []string {
-	proxyKeys := map[string]bool{
-		"HTTPS_PROXY": true, "HTTP_PROXY": true,
-		"https_proxy": true, "http_proxy": true,
-	}
 	result := make([]string, 0, len(env))
 	for _, kv := range env {
 		i := strings.IndexByte(kv, '=')
-		if i < 0 || !proxyKeys[kv[:i]] {
+		if i < 0 || !slices.Contains(proxyEnvKeys, kv[:i]) {
 			result = append(result, kv)
 			continue
 		}
