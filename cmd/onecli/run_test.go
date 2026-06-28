@@ -201,6 +201,15 @@ func TestRewriteProxyEnvHostsUsesGatewayScheme(t *testing.T) {
 	}
 }
 
+func TestResolveLocalGatewayEndpointBareOverrideUsesHTTP(t *testing.T) {
+	t.Setenv("ONECLI_API_HOST", "https://onecli.taildffa1.ts.net")
+
+	got := resolveLocalGatewayEndpoint("onecli.taildffa1.ts.net")
+	if got.Scheme != "http" || got.Host != "onecli.taildffa1.ts.net" {
+		t.Fatalf("endpoint = %+v, want http onecli.taildffa1.ts.net", got)
+	}
+}
+
 func TestPrependPythonPath(t *testing.T) {
 	sep := string(os.PathListSeparator)
 	t.Run("absent appends", func(t *testing.T) {
