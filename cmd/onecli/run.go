@@ -365,7 +365,7 @@ func resolveLocalGatewayEndpoint(override string) gatewayEndpoint {
 				return gatewayEndpoint{Scheme: scheme, Host: u.Host}
 			}
 		}
-		return gatewayEndpoint{Scheme: "http", Host: override}
+		return gatewayEndpoint{Scheme: apiScheme, Host: override}
 	}
 
 	if err != nil || u.Hostname() == "" {
