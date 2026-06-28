@@ -1,6 +1,7 @@
-package main
+package hashicorpvaultcli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -9,27 +10,52 @@ import (
 	"github.com/onecli/onecli-cli/pkg/validate"
 )
 
-// HashicorpVaultCmd is the `onecli hashicorp-vault` command group.
-type HashicorpVaultCmd struct {
-	Mappings VaultMappingsCmd `cmd:"" help:"Manage HashiCorp Vault hostname mappings."`
-	Paths    VaultPathsCmd    `cmd:"" help:"Browse HashiCorp Vault KV paths."`
-	Secrets  VaultSecretsCmd  `cmd:"" help:"Inspect and write HashiCorp Vault secret fields."`
+// Client is the subset of the API client used by the HashiCorp Vault commands.
+type Client interface {
+	ListVaultMappings(ctx context.Context, projectID string) ([]api.VaultMapping, error)
+	UpsertVaultMapping(ctx context.Context, projectID string, input api.UpsertVaultMappingInput) ([]api.VaultMapping, error)
+	DeleteVaultMapping(ctx context.Context, projectID string, input api.UpsertVaultMappingInput) ([]api.VaultMapping, error)
+	ListVaultPath(ctx context.Context, projectID, vaultPath string) ([]api.VaultPathEntry, error)
+	GetVaultSecretMetadata(ctx context.Context, projectID, vaultPath string) (*api.VaultSecretMetadata, error)
+	WriteVaultFields(ctx context.Context, projectID string, input api.WriteVaultFieldsInput) (*api.VaultSecretMetadata, error)
 }
 
-// VaultMappingsCmd is the `onecli hashicorp-vault mappings` command group.
-type VaultMappingsCmd struct {
-	List   VaultMappingsListCmd   `cmd:"" help:"List HashiCorp Vault hostname mappings."`
-	Upsert VaultMappingsUpsertCmd `cmd:"" help:"Create or update a HashiCorp Vault hostname mapping."`
-	Delete VaultMappingsDeleteCmd `cmd:"" help:"Delete a HashiCorp Vault hostname mapping."`
+// Dependencies are provided by the main package so this command module stays
+// isolated from root CLI setup and credential/config resolution.
+type Dependencies struct {
+	NewClient      func() (Client, error)
+	NewContext     func() context.Context
+	ResolveProject func(string) (string, error)
 }
 
-type VaultMappingsListCmd struct {
+var deps Dependencies
+
+// Configure wires the command module to the root CLI runtime.
+func Configure(d Dependencies) {
+	deps = d
+}
+
+// Command is the `onecli hashicorp-vault` command group.
+type Command struct {
+	Mappings MappingsCmd `cmd:"" help:"Manage HashiCorp Vault hostname mappings."`
+	Paths    PathsCmd    `cmd:"" help:"Browse HashiCorp Vault KV paths."`
+	Secrets  SecretsCmd  `cmd:"" help:"Inspect and write HashiCorp Vault secret fields."`
+}
+
+// MappingsCmd is the `onecli hashicorp-vault mappings` command group.
+type MappingsCmd struct {
+	List   MappingsListCmd   `cmd:"" help:"List HashiCorp Vault hostname mappings."`
+	Upsert MappingsUpsertCmd `cmd:"" help:"Create or update a HashiCorp Vault hostname mapping."`
+	Delete MappingsDeleteCmd `cmd:"" help:"Delete a HashiCorp Vault hostname mapping."`
+}
+
+type MappingsListCmd struct {
 	Project string `optional:"" short:"p" help:"Project slug."`
 	Fields  string `optional:"" help:"Comma-separated list of fields to include in output."`
 	Quiet   string `optional:"" name:"quiet" help:"Output only the specified field, one per line."`
 }
 
-func (c *VaultMappingsListCmd) Run(out *output.Writer) error {
+func (c *MappingsListCmd) Run(out *output.Writer) error {
 	project, err := resolveProject(c.Project)
 	if err != nil {
 		return err
@@ -48,7 +74,7 @@ func (c *VaultMappingsListCmd) Run(out *output.Writer) error {
 	return out.WriteFiltered(mappings, c.Fields)
 }
 
-type VaultMappingsUpsertCmd struct {
+type MappingsUpsertCmd struct {
 	Project       string `optional:"" short:"p" help:"Project slug."`
 	Hostname      string `required:"" help:"Upstream hostname, e.g. api.openai.com."`
 	Path          string `required:"" help:"Vault logical secret path."`
@@ -58,7 +84,7 @@ type VaultMappingsUpsertCmd struct {
 	DryRun        bool   `optional:"" name:"dry-run" help:"Validate the request without executing it."`
 }
 
-func (c *VaultMappingsUpsertCmd) Run(out *output.Writer) error {
+func (c *MappingsUpsertCmd) Run(out *output.Writer) error {
 	input, err := vaultMappingInput(c.Json, c.Hostname, c.Path, c.Field, c.UsernameField)
 	if err != nil {
 		return err
@@ -81,7 +107,7 @@ func (c *VaultMappingsUpsertCmd) Run(out *output.Writer) error {
 	return out.Write(mappings)
 }
 
-type VaultMappingsDeleteCmd struct {
+type MappingsDeleteCmd struct {
 	Project       string `optional:"" short:"p" help:"Project slug."`
 	Hostname      string `required:"" help:"Upstream hostname, e.g. api.openai.com."`
 	Path          string `required:"" help:"Vault logical secret path."`
@@ -91,7 +117,7 @@ type VaultMappingsDeleteCmd struct {
 	DryRun        bool   `optional:"" name:"dry-run" help:"Validate the request without executing it."`
 }
 
-func (c *VaultMappingsDeleteCmd) Run(out *output.Writer) error {
+func (c *MappingsDeleteCmd) Run(out *output.Writer) error {
 	input, err := vaultMappingInput(c.Json, c.Hostname, c.Path, c.Field, c.UsernameField)
 	if err != nil {
 		return err
@@ -114,19 +140,19 @@ func (c *VaultMappingsDeleteCmd) Run(out *output.Writer) error {
 	return out.Write(mappings)
 }
 
-// VaultPathsCmd is the `onecli hashicorp-vault paths` command group.
-type VaultPathsCmd struct {
-	List VaultPathsListCmd `cmd:"" help:"List children under a HashiCorp Vault KV path."`
+// PathsCmd is the `onecli hashicorp-vault paths` command group.
+type PathsCmd struct {
+	List PathsListCmd `cmd:"" help:"List children under a HashiCorp Vault KV path."`
 }
 
-type VaultPathsListCmd struct {
+type PathsListCmd struct {
 	Project string `optional:"" short:"p" help:"Project slug."`
 	Path    string `optional:"" help:"Vault logical path to list."`
 	Fields  string `optional:"" help:"Comma-separated list of fields to include in output."`
 	Quiet   string `optional:"" name:"quiet" help:"Output only the specified field, one per line."`
 }
 
-func (c *VaultPathsListCmd) Run(out *output.Writer) error {
+func (c *PathsListCmd) Run(out *output.Writer) error {
 	if err := validate.NoControlChars(c.Path); err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}
@@ -148,19 +174,19 @@ func (c *VaultPathsListCmd) Run(out *output.Writer) error {
 	return out.WriteFiltered(entries, c.Fields)
 }
 
-// VaultSecretsCmd is the `onecli hashicorp-vault secrets` command group.
-type VaultSecretsCmd struct {
-	Metadata   VaultSecretsMetadataCmd   `cmd:"" help:"Show fields and mappings for a HashiCorp Vault secret path."`
-	WriteField VaultSecretsWriteFieldCmd `cmd:"" name:"write-field" help:"Write one field to a HashiCorp Vault secret path."`
+// SecretsCmd is the `onecli hashicorp-vault secrets` command group.
+type SecretsCmd struct {
+	Metadata   SecretsMetadataCmd   `cmd:"" help:"Show fields and mappings for a HashiCorp Vault secret path."`
+	WriteField SecretsWriteFieldCmd `cmd:"" name:"write-field" help:"Write one field to a HashiCorp Vault secret path."`
 }
 
-type VaultSecretsMetadataCmd struct {
+type SecretsMetadataCmd struct {
 	Project string `optional:"" short:"p" help:"Project slug."`
 	Path    string `required:"" help:"Vault logical secret path."`
 	Fields  string `optional:"" help:"Comma-separated list of fields to include in output."`
 }
 
-func (c *VaultSecretsMetadataCmd) Run(out *output.Writer) error {
+func (c *SecretsMetadataCmd) Run(out *output.Writer) error {
 	if err := validate.NoControlChars(c.Path); err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}
@@ -179,7 +205,7 @@ func (c *VaultSecretsMetadataCmd) Run(out *output.Writer) error {
 	return out.WriteFiltered(metadata, c.Fields)
 }
 
-type VaultSecretsWriteFieldCmd struct {
+type SecretsWriteFieldCmd struct {
 	Project string `optional:"" short:"p" help:"Project slug."`
 	Path    string `required:"" help:"Vault logical secret path."`
 	Field   string `required:"" help:"Vault field to write."`
@@ -187,7 +213,7 @@ type VaultSecretsWriteFieldCmd struct {
 	DryRun  bool   `optional:"" name:"dry-run" help:"Validate the request without executing it."`
 }
 
-func (c *VaultSecretsWriteFieldCmd) Run(out *output.Writer) error {
+func (c *SecretsWriteFieldCmd) Run(out *output.Writer) error {
 	if err := validate.NoControlChars(c.Path); err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}
@@ -249,4 +275,25 @@ func vaultMappingInput(rawJSON, hostname, path, field, usernameField string) (ap
 		return input, fmt.Errorf("hostname, path, and field are required")
 	}
 	return input, nil
+}
+
+func newClient() (Client, error) {
+	if deps.NewClient == nil {
+		return nil, fmt.Errorf("hashicorp vault CLI dependencies are not configured")
+	}
+	return deps.NewClient()
+}
+
+func newContext() context.Context {
+	if deps.NewContext == nil {
+		return context.Background()
+	}
+	return deps.NewContext()
+}
+
+func resolveProject(project string) (string, error) {
+	if deps.ResolveProject == nil {
+		return project, nil
+	}
+	return deps.ResolveProject(project)
 }
