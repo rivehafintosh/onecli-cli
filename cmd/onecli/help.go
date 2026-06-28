@@ -195,7 +195,7 @@ func (cmd *HelpCmd) Run(out *output.Writer) error {
 				{Name: "--enabled", Required: true, Description: "Set to true to enable, false to disable."},
 			}},
 			{Name: "hashicorp-vault mappings list", Description: "List HashiCorp Vault hostname mappings."},
-			{Name: "hashicorp-vault mappings upsert", Description: "Create or update a HashiCorp Vault hostname mapping.", Args: []ArgInfo{
+			{Name: "hashicorp-vault mappings set", Description: "Create or update a HashiCorp Vault hostname mapping.", Args: []ArgInfo{
 				{Name: "--hostname", Required: true, Description: "Upstream hostname, e.g. api.openai.com."},
 				{Name: "--path", Required: true, Description: "Vault logical secret path."},
 				{Name: "--field", Required: true, Description: "Vault field containing the credential value."},

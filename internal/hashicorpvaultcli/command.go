@@ -45,7 +45,7 @@ type Command struct {
 // MappingsCmd is the `onecli hashicorp-vault mappings` command group.
 type MappingsCmd struct {
 	List   MappingsListCmd   `cmd:"" help:"List HashiCorp Vault hostname mappings."`
-	Upsert MappingsUpsertCmd `cmd:"" help:"Create or update a HashiCorp Vault hostname mapping."`
+	Set    MappingsSetCmd    `cmd:"" aliases:"upsert" help:"Create or update a HashiCorp Vault hostname mapping."`
 	Delete MappingsDeleteCmd `cmd:"" help:"Delete a HashiCorp Vault hostname mapping."`
 }
 
@@ -74,7 +74,7 @@ func (c *MappingsListCmd) Run(out *output.Writer) error {
 	return out.WriteFiltered(mappings, c.Fields)
 }
 
-type MappingsUpsertCmd struct {
+type MappingsSetCmd struct {
 	Project       string `optional:"" short:"p" help:"Project slug."`
 	Hostname      string `required:"" help:"Upstream hostname, e.g. api.openai.com."`
 	Path          string `required:"" help:"Vault logical secret path."`
@@ -84,7 +84,7 @@ type MappingsUpsertCmd struct {
 	DryRun        bool   `optional:"" name:"dry-run" help:"Validate the request without executing it."`
 }
 
-func (c *MappingsUpsertCmd) Run(out *output.Writer) error {
+func (c *MappingsSetCmd) Run(out *output.Writer) error {
 	input, err := vaultMappingInput(c.Json, c.Hostname, c.Path, c.Field, c.UsernameField)
 	if err != nil {
 		return err
