@@ -45,7 +45,7 @@ type Command struct {
 // MappingsCmd is the `onecli hashicorp-vault mappings` command group.
 type MappingsCmd struct {
 	List   MappingsListCmd   `cmd:"" help:"List HashiCorp Vault hostname mappings."`
-	Set    MappingsSetCmd    `cmd:"" aliases:"upsert" help:"Create or update a HashiCorp Vault hostname mapping."`
+	Set    MappingsSetCmd    `cmd:"" help:"Create or update a HashiCorp Vault hostname mapping."`
 	Delete MappingsDeleteCmd `cmd:"" help:"Delete a HashiCorp Vault hostname mapping."`
 }
 
