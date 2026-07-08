@@ -1,5 +1,38 @@
 # Changelog
 
+## [2.5.0](https://github.com/onecli/onecli-cli/compare/v2.4.0...v2.5.0) (2026-07-05)
+
+
+### Features
+
+* identity-only permission catalogs in rule and app output ([#91](https://github.com/onecli/onecli-cli/issues/91)) ([00613a4](https://github.com/onecli/onecli-cli/commit/00613a4be62139af26ef63b75e7e92cc307e4a8b))
+
+## [2.4.0](https://github.com/onecli/onecli-cli/compare/v2.3.1...v2.4.0) (2026-07-04)
+
+
+### Features
+
+* add org apps connect and authorize commands ([#88](https://github.com/onecli/onecli-cli/issues/88)) ([e5b75db](https://github.com/onecli/onecli-cli/commit/e5b75db5a37e22f49a5027c9547622e5ff4a040f))
+
+
+### Bug Fixes
+
+* refresh stale gateway proxy_url in Codex config on each run ([#89](https://github.com/onecli/onecli-cli/issues/89)) ([1a01afc](https://github.com/onecli/onecli-cli/commit/1a01afcf4fd4c846ef0215860dd133d4149ae473))
+
+## [2.3.1](https://github.com/onecli/onecli-cli/compare/v2.3.0...v2.3.1) (2026-07-04)
+
+
+### Bug Fixes
+
+* register gateway hook in Codex's native hooks.json so it fires ([#84](https://github.com/onecli/onecli-cli/issues/84)) ([e097d12](https://github.com/onecli/onecli-cli/commit/e097d12679de28d63da1d34e64b60d4bd6cae89a))
+
+## [2.3.0](https://github.com/onecli/onecli-cli/compare/v2.2.7...v2.3.0) (2026-07-03)
+
+
+### Features
+
+* align the CLI with the current cloud API and expose its full surface ([#85](https://github.com/onecli/onecli-cli/issues/85)) ([5d5a0c8](https://github.com/onecli/onecli-cli/commit/5d5a0c8a79c5f5801df249b8aaf61f5c1aecff50))
+
 ## [2.2.7](https://github.com/onecli/onecli-cli/compare/v2.2.6...v2.2.7) (2026-06-23)
 
 

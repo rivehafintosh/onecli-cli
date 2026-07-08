@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/onecli/onecli-cli/pkg/output"
 
 	"gopkg.in/yaml.v3"
 )
@@ -143,7 +148,7 @@ func TestAgentSkillDir(t *testing.T) {
 		{"claude", agentSpec{agentName: "Claude Code", baseDir: ".claude"}, true},
 		{"cursor", agentSpec{agentName: "Cursor", baseDir: ".cursor", configDir: "Cursor"}, true},
 		{"agent", agentSpec{agentName: "Cursor", baseDir: ".cursor", configDir: "Cursor"}, true},
-		{"codex", agentSpec{agentName: "Codex", baseDir: ".agents", nativeProxyConfig: ".codex"}, true},
+		{"codex", agentSpec{agentName: "Codex", baseDir: ".agents", nativeProxyConfig: ".codex", hooksFile: ".codex/hooks.json"}, true},
 		{"hermes", agentSpec{agentName: "Hermes", baseDir: ".hermes", skipHook: true, pluginGateway: true, dockerSandbox: true}, true},
 		{"opencode", agentSpec{agentName: "OpenCode", baseDir: ".opencode"}, true},
 		{"/usr/local/bin/cursor", agentSpec{agentName: "Cursor", baseDir: ".cursor", configDir: "Cursor"}, true},
@@ -616,6 +621,345 @@ func TestMergeVSCodeProxySettings_RejectsJSONC(t *testing.T) {
 	if !strings.Contains(err.Error(), "comments or invalid JSON") {
 		t.Errorf("error = %q, want mention of comments", err.Error())
 	}
+}
+
+func TestRegisterUserPromptHook_NewFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".codex", "hooks.json")
+
+	changed, err := registerUserPromptHook(path, "bash /home/u/.agents/hooks/UserPromptSubmit/onecli_gateway_detect.sh", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+
+	entries := userPromptEntries(t, path)
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	entry := entries[0].(map[string]any)
+	if _, hasMatcher := entry["matcher"]; hasMatcher {
+		t.Error("dedicated hooks file entry should not include matcher")
+	}
+	inner := entry["hooks"].([]any)[0].(map[string]any)
+	if inner["type"] != "command" {
+		t.Errorf("type = %v, want command", inner["type"])
+	}
+}
+
+func TestRegisterUserPromptHook_PreservesExistingHooks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+	writeJSON(t, path, `{
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "notify.sh session"}]}
+    ],
+    "UserPromptSubmit": [
+      {"hooks": [{"type": "command", "command": "notify.sh prompt"}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "notify.sh stop"}]}
+    ]
+  }
+}
+`)
+
+	changed, err := registerUserPromptHook(path, "bash detect.sh", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+
+	m := readSettingsMap(t, path)
+	hooks := m["hooks"].(map[string]any)
+	for _, event := range []string{"SessionStart", "Stop"} {
+		if entries, ok := hooks[event].([]any); !ok || len(entries) != 1 {
+			t.Errorf("existing %s hooks were dropped", event)
+		}
+	}
+	entries := hooks["UserPromptSubmit"].([]any)
+	if len(entries) != 2 {
+		t.Fatalf("UserPromptSubmit entries = %d, want 2 (existing + ours)", len(entries))
+	}
+	first := entries[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)
+	if first["command"] != "notify.sh prompt" {
+		t.Errorf("existing entry displaced: %v", first["command"])
+	}
+}
+
+func TestRegisterUserPromptHook_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+
+	if changed, err := registerUserPromptHook(path, "bash detect.sh", false); err != nil || !changed {
+		t.Fatalf("first call: changed=%v err=%v", changed, err)
+	}
+	if changed, err := registerUserPromptHook(path, "bash detect.sh", false); err != nil || changed {
+		t.Fatalf("second call: changed=%v err=%v, want no-op", changed, err)
+	}
+	if entries := userPromptEntries(t, path); len(entries) != 1 {
+		t.Errorf("entries = %d, want 1", len(entries))
+	}
+}
+
+func TestRegisterUserPromptHook_SettingsMatcher(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+
+	if _, err := registerUserPromptHook(path, "bash detect.sh", true); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	entry := userPromptEntries(t, path)[0].(map[string]any)
+	if m, ok := entry["matcher"]; !ok || m != "" {
+		t.Errorf("matcher = %v (present=%v), want empty string present", m, ok)
+	}
+}
+
+func TestRegisterUserPromptHook_InvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+	writeJSON(t, path, `{not json`)
+
+	if _, err := registerUserPromptHook(path, "bash detect.sh", false); err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestGatewayDetectHook_EmitsJSONEnvelope(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hook script requires bash")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "hook.sh")
+	if err := os.WriteFile(script, []byte(gatewayDetectHook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("gateway active", func(t *testing.T) {
+		cmd := exec.Command("bash", script)
+		cmd.Env = []string{"HTTPS_PROXY=http://aoc_tok:x@127.0.0.1:10255"}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("hook failed: %v", err)
+		}
+		var envelope struct {
+			HookSpecificOutput struct {
+				HookEventName     string `json:"hookEventName"`
+				AdditionalContext string `json:"additionalContext"`
+			} `json:"hookSpecificOutput"`
+		}
+		if err := json.Unmarshal(out, &envelope); err != nil {
+			t.Fatalf("hook output is not valid JSON: %v\noutput: %s", err, out)
+		}
+		if envelope.HookSpecificOutput.HookEventName != "UserPromptSubmit" {
+			t.Errorf("hookEventName = %q, want UserPromptSubmit", envelope.HookSpecificOutput.HookEventName)
+		}
+		if !strings.Contains(envelope.HookSpecificOutput.AdditionalContext, "OneCLI gateway active") {
+			t.Errorf("additionalContext = %q, want gateway notice", envelope.HookSpecificOutput.AdditionalContext)
+		}
+	})
+
+	t.Run("gateway inactive", func(t *testing.T) {
+		cmd := exec.Command("bash", script)
+		cmd.Env = []string{"HTTPS_PROXY=http://corp-proxy:8080"}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("hook failed: %v", err)
+		}
+		if len(bytes.TrimSpace(out)) != 0 {
+			t.Errorf("expected no output when gateway inactive, got: %s", out)
+		}
+	})
+}
+
+func TestMaybeInstallGatewayHook_CodexHooksFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test overrides HOME, which UserHomeDir ignores on windows")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Pre-existing hooks.json with a third-party hook, as other Codex tools
+	// write it (no matcher field).
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	writeJSON(t, hooksPath, `{
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "notify.sh session"}]}
+    ]
+  }
+}
+`)
+
+	var stderr bytes.Buffer
+	out := output.NewWithWriters(io.Discard, &stderr)
+	maybeInstallGatewayHook(out, "Codex", ".agents", ".codex/hooks.json")
+
+	// Hook script lands under the shared .agents dir.
+	scriptPath := filepath.Join(home, ".agents", "hooks", "UserPromptSubmit", "onecli_gateway_detect.sh")
+	script, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("hook script not written: %v", err)
+	}
+	if !bytes.Equal(script, []byte(gatewayDetectHook)) {
+		t.Error("hook script content mismatch")
+	}
+
+	// Registration lands in ~/.codex/hooks.json, preserving the existing hook.
+	m := readSettingsMap(t, hooksPath)
+	hooks := m["hooks"].(map[string]any)
+	if _, ok := hooks["SessionStart"].([]any); !ok {
+		t.Error("existing SessionStart hook was dropped")
+	}
+	entries, _ := hooks["UserPromptSubmit"].([]any)
+	if len(entries) != 1 {
+		t.Fatalf("UserPromptSubmit entries = %d, want 1", len(entries))
+	}
+	cmd := entries[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"].(string)
+	if cmd != "bash "+scriptPath {
+		t.Errorf("command = %q, want %q", cmd, "bash "+scriptPath)
+	}
+	if !strings.Contains(stderr.String(), "installed gateway hook for Codex") {
+		t.Errorf("stderr = %q, want install notice", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "run /hooks inside it to trust") {
+		t.Errorf("stderr = %q, want one-time trust notice for dedicated hooks file", stderr.String())
+	}
+
+	// The Claude-style settings.json must not be created when hooksFile is set.
+	if _, err := os.Stat(filepath.Join(home, ".agents", "settings.json")); !os.IsNotExist(err) {
+		t.Error("settings.json should not be created when hooksFile is set")
+	}
+}
+
+func TestUpsertGatewayProxyURL(t *testing.T) {
+	gw := "http://aoc_new:x@127.0.0.1:10255"
+	tests := []struct {
+		name    string
+		content string
+		want    string
+		status  proxyURLStatus
+	}{
+		{
+			name:    "empty file gets network section",
+			content: "",
+			want:    "\n[network]\nproxy_url = \"" + gw + "\"\n",
+			status:  proxyURLAdded,
+		},
+		{
+			name:    "existing config gets section appended",
+			content: "model = \"o4\"\n",
+			want:    "model = \"o4\"\n\n[network]\nproxy_url = \"" + gw + "\"\n",
+			status:  proxyURLAdded,
+		},
+		{
+			name:    "stale gateway url refreshed in place",
+			content: "# codex config\nmodel = \"o4\"\n\n[network]\nproxy_url = \"http://aoc_old:x@127.0.0.1:10255\"\nkeep = true\n",
+			want:    "# codex config\nmodel = \"o4\"\n\n[network]\nproxy_url = \"" + gw + "\"\nkeep = true\n",
+			status:  proxyURLRefreshed,
+		},
+		{
+			name:    "current gateway url untouched",
+			content: "[network]\nproxy_url = \"" + gw + "\"\n",
+			want:    "[network]\nproxy_url = \"" + gw + "\"\n",
+			status:  proxyURLCurrent,
+		},
+		{
+			name:    "user-managed proxy untouched",
+			content: "[network]\nproxy_url = \"http://corp-proxy:8080\"\n",
+			want:    "[network]\nproxy_url = \"http://corp-proxy:8080\"\n",
+			status:  proxyURLForeign,
+		},
+		{
+			name:    "unparseable proxy_url line untouched",
+			content: "[network]\nproxy_url = \"http://aoc_old:x@127.0.0.1:10255\" # pinned\n",
+			want:    "[network]\nproxy_url = \"http://aoc_old:x@127.0.0.1:10255\" # pinned\n",
+			status:  proxyURLForeign,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, status := upsertGatewayProxyURL(tt.content, gw)
+			if got != tt.want {
+				t.Errorf("content = %q, want %q", got, tt.want)
+			}
+			if status != tt.status {
+				t.Errorf("status = %d, want %d", status, tt.status)
+			}
+		})
+	}
+}
+
+func TestMaybeInjectNativeProxyConfig_RefreshesStaleToken(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test overrides HOME, which UserHomeDir ignores on windows")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	stale := "model = \"o4\"\n\n[network]\nproxy_url = \"http://aoc_old:x@127.0.0.1:10255\"\n"
+	if err := os.WriteFile(configPath, []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	out := output.NewWithWriters(io.Discard, &stderr)
+	env := []string{"HTTPS_PROXY=http://aoc_new:x@127.0.0.1:10255"}
+	maybeInjectNativeProxyConfig(out, "Codex", ".codex", env, "")
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "aoc_new") {
+		t.Errorf("stale token was not refreshed: %s", content)
+	}
+	if strings.Contains(content, "aoc_old") {
+		t.Errorf("stale token still present: %s", content)
+	}
+	if !strings.Contains(content, "model = \"o4\"") {
+		t.Errorf("unrelated config was dropped: %s", content)
+	}
+	if !strings.Contains(stderr.String(), "updated native proxy for Codex") {
+		t.Errorf("stderr = %q, want update notice", stderr.String())
+	}
+
+	// A user-managed proxy_url must survive and produce a warning.
+	custom := "[network]\nproxy_url = \"http://corp-proxy:8080\"\n"
+	if err := os.WriteFile(configPath, []byte(custom), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stderr.Reset()
+	maybeInjectNativeProxyConfig(out, "Codex", ".codex", env, "")
+	data, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != custom {
+		t.Errorf("user-managed config was modified: %s", data)
+	}
+	if !strings.Contains(stderr.String(), "custom proxy_url") {
+		t.Errorf("stderr = %q, want custom proxy warning", stderr.String())
+	}
+}
+
+func userPromptEntries(t *testing.T, path string) []any {
+	t.Helper()
+	m := readSettingsMap(t, path)
+	hooks, _ := m["hooks"].(map[string]any)
+	entries, _ := hooks["UserPromptSubmit"].([]any)
+	return entries
 }
 
 func readSettingsMap(t *testing.T, path string) map[string]any {
