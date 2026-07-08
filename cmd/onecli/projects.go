@@ -66,7 +66,7 @@ func (c *ProjectsGetCmd) Run(out *output.Writer) error {
 
 // ProjectsCreateCmd is `onecli projects create`.
 type ProjectsCreateCmd struct {
-	Name   string `required:"" help:"Display name for the project."`
+	Name   string `optional:"" help:"Display name for the project. Required unless --json is provided."`
 	Json   string `optional:"" help:"Raw JSON payload. Overrides individual flags."`
 	DryRun bool   `optional:"" name:"dry-run" help:"Validate the request without executing it."`
 }
@@ -78,9 +78,15 @@ func (c *ProjectsCreateCmd) Run(out *output.Writer) error {
 			return fmt.Errorf("invalid JSON payload: %w", err)
 		}
 	} else {
+		if c.Name == "" {
+			return fmt.Errorf("--name is required unless --json is provided")
+		}
 		input = api.CreateProjectInput{
 			Name: c.Name,
 		}
+	}
+	if input.Name == "" {
+		return fmt.Errorf("project name is required")
 	}
 
 	if c.DryRun {
