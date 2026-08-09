@@ -148,9 +148,10 @@ func TestAgentSkillDir(t *testing.T) {
 		{"claude", agentSpec{agentName: "Claude Code", baseDir: ".claude"}, true},
 		{"cursor", agentSpec{agentName: "Cursor", baseDir: ".cursor", configDir: "Cursor"}, true},
 		{"agent", agentSpec{agentName: "Cursor", baseDir: ".cursor", configDir: "Cursor"}, true},
-		{"codex", agentSpec{agentName: "Codex", baseDir: ".agents", nativeProxyConfig: ".codex", hooksFile: ".codex/hooks.json"}, true},
+		{"codex", agentSpec{agentName: "Codex", baseDir: ".agents", skipHook: true, nativeProxyConfig: ".codex"}, true},
 		{"hermes", agentSpec{agentName: "Hermes", baseDir: ".hermes", skipHook: true, pluginGateway: true, dockerSandbox: true}, true},
 		{"opencode", agentSpec{agentName: "OpenCode", baseDir: ".opencode"}, true},
+		{"openclaw", agentSpec{agentName: "OpenClaw", baseDir: ".openclaw", skipHook: true, needsAnthropicKey: true}, true},
 		{"/usr/local/bin/cursor", agentSpec{agentName: "Cursor", baseDir: ".cursor", configDir: "Cursor"}, true},
 		{"unknown", agentSpec{}, false},
 	}
@@ -165,6 +166,102 @@ func TestAgentSkillDir(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEnsureEnv(t *testing.T) {
+	t.Run("appends when absent", func(t *testing.T) {
+		env := ensureEnv([]string{"HOME=/h"}, "ANTHROPIC_API_KEY", anthropicKeyPlaceholder)
+		if v, ok := envValue(env, "ANTHROPIC_API_KEY"); !ok || v != anthropicKeyPlaceholder {
+			t.Errorf("ANTHROPIC_API_KEY = %q, want placeholder", v)
+		}
+	})
+	t.Run("an existing value wins (the user's shell key)", func(t *testing.T) {
+		env := ensureEnv([]string{"ANTHROPIC_API_KEY=sk-ant-real"}, "ANTHROPIC_API_KEY", anthropicKeyPlaceholder)
+		if len(env) != 1 {
+			t.Fatalf("env grew to %d entries; a duplicate would be ambiguous under POSIX first-match", len(env))
+		}
+		if v, _ := envValue(env, "ANTHROPIC_API_KEY"); v != "sk-ant-real" {
+			t.Errorf("ANTHROPIC_API_KEY = %q, want the existing value", v)
+		}
+	})
+	t.Run("does not match on key prefix", func(t *testing.T) {
+		env := ensureEnv([]string{"ANTHROPIC_API_KEY_BACKUP=x"}, "ANTHROPIC_API_KEY", anthropicKeyPlaceholder)
+		if v, ok := envValue(env, "ANTHROPIC_API_KEY"); !ok || v != anthropicKeyPlaceholder {
+			t.Errorf("ANTHROPIC_API_KEY = %q, want placeholder despite the prefixed sibling", v)
+		}
+	})
+}
+
+func TestCodexSkipsGatewayHook(t *testing.T) {
+	// Codex renders injected hook context visibly in its transcript
+	// (Claude injects it silently), so `onecli run` must NOT register the
+	// gateway hook for Codex — the auto-loaded onecli-gateway skill carries
+	// the same guidance without the per-prompt noise.
+	spec, ok := agentSkillDir("codex")
+	if !ok {
+		t.Fatal("codex spec not found")
+	}
+	if !spec.skipHook {
+		t.Error("codex must set skipHook so the gateway hook is not registered")
+	}
+	if spec.hooksFile != "" {
+		t.Errorf("codex hooksFile = %q, want empty (hook is skipped)", spec.hooksFile)
+	}
+	// Claude, by contrast, keeps the hook (silent injection there).
+	if claude, _ := agentSkillDir("claude"); claude.skipHook {
+		t.Error("claude must keep the gateway hook (skipHook should be false)")
+	}
+}
+
+func TestSuppressUndiciProxyWarning(t *testing.T) {
+	t.Run("no-op without NODE_USE_ENV_PROXY", func(t *testing.T) {
+		in := []string{"HOME=/h", "NODE_OPTIONS=--foo"}
+		out := suppressUndiciProxyWarning(in)
+		if v, _ := envValue(out, "NODE_OPTIONS"); v != "--foo" {
+			t.Errorf("NODE_OPTIONS = %q, want untouched --foo", v)
+		}
+	})
+
+	t.Run("adds NODE_OPTIONS when proxy flag present and none set", func(t *testing.T) {
+		out := suppressUndiciProxyWarning([]string{"NODE_USE_ENV_PROXY=1"})
+		if v, ok := envValue(out, "NODE_OPTIONS"); !ok || v != undiciWarningFlag {
+			t.Errorf("NODE_OPTIONS = %q (present=%v), want %q", v, ok, undiciWarningFlag)
+		}
+	})
+
+	t.Run("appends to existing NODE_OPTIONS in place", func(t *testing.T) {
+		out := suppressUndiciProxyWarning([]string{"NODE_USE_ENV_PROXY=1", "NODE_OPTIONS=--max-old-space-size=4096"})
+		v, _ := envValue(out, "NODE_OPTIONS")
+		if v != "--max-old-space-size=4096 "+undiciWarningFlag {
+			t.Errorf("NODE_OPTIONS = %q, want existing flag preserved + suppression", v)
+		}
+		// Must not create a second NODE_OPTIONS (POSIX first-match ambiguity).
+		n := 0
+		for _, kv := range out {
+			if strings.HasPrefix(kv, "NODE_OPTIONS=") {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("NODE_OPTIONS entries = %d, want 1", n)
+		}
+	})
+
+	t.Run("idempotent when already present", func(t *testing.T) {
+		in := []string{"NODE_USE_ENV_PROXY=1", "NODE_OPTIONS=" + undiciWarningFlag}
+		out := suppressUndiciProxyWarning(in)
+		v, _ := envValue(out, "NODE_OPTIONS")
+		if v != undiciWarningFlag {
+			t.Errorf("NODE_OPTIONS = %q, want unchanged (no double-add)", v)
+		}
+	})
+
+	t.Run("fills an empty NODE_OPTIONS", func(t *testing.T) {
+		out := suppressUndiciProxyWarning([]string{"NODE_USE_ENV_PROXY=1", "NODE_OPTIONS="})
+		if v, _ := envValue(out, "NODE_OPTIONS"); v != undiciWarningFlag {
+			t.Errorf("NODE_OPTIONS = %q, want %q", v, undiciWarningFlag)
+		}
+	})
 }
 
 func TestProxyURLWithHost(t *testing.T) {
@@ -777,7 +874,13 @@ func TestGatewayDetectHook_EmitsJSONEnvelope(t *testing.T) {
 	})
 }
 
-func TestMaybeInstallGatewayHook_CodexHooksFile(t *testing.T) {
+// TestMaybeInstallGatewayHook_DedicatedHooksFile covers the dedicated
+// hooks-file registration path (a home-relative hooksFile, no matcher, plus
+// the one-time trust notice), exercised via a Codex-style ~/.codex/hooks.json.
+// Note: `onecli run` no longer registers this hook for Codex itself (Codex
+// renders injected hook context visibly; see supportedAgents) — this verifies
+// the underlying helper for any agent that opts into a dedicated hooks file.
+func TestMaybeInstallGatewayHook_DedicatedHooksFile(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test overrides HOME, which UserHomeDir ignores on windows")
 	}

@@ -1,5 +1,54 @@
 # Changelog
 
+## [2.11.0](https://github.com/onecli/onecli-cli/compare/v2.10.0...v2.11.0) (2026-07-30)
+
+
+### Features
+
+* **run:** OpenClaw joins the supported agents table ([#108](https://github.com/onecli/onecli-cli/issues/108)) ([02a40ec](https://github.com/onecli/onecli-cli/commit/02a40ec2147d40f85b08b295bf422dfcb66c2754))
+
+## [2.10.0](https://github.com/onecli/onecli-cli/compare/v2.9.0...v2.10.0) (2026-07-30)
+
+
+### Features
+
+* **run:** persistent agent identity via the agent config key and ONECLI_AGENT ([#106](https://github.com/onecli/onecli-cli/issues/106)) ([fe5c399](https://github.com/onecli/onecli-cli/commit/fe5c399a264694fa184d743cc092e1f3455c033c))
+
+## [2.9.0](https://github.com/onecli/onecli-cli/compare/v2.8.1...v2.9.0) (2026-07-29)
+
+
+### Features
+
+* **agents:** grants — the per-agent credential attach surface ([#102](https://github.com/onecli/onecli-cli/issues/102)) ([d8f38aa](https://github.com/onecli/onecli-cli/commit/d8f38aa33ae9db8510d62d3f546c79eecf451935))
+
+## [2.8.1](https://github.com/onecli/onecli-cli/compare/v2.8.0...v2.8.1) (2026-07-29)
+
+
+### Bug Fixes
+
+* **build:** restore the Windows build broken by the enforce forwarder ([#100](https://github.com/onecli/onecli-cli/issues/100)) ([38e2b84](https://github.com/onecli/onecli-cli/commit/38e2b84f44d8e9632502c488e55187eaecc5cdf4))
+
+## [2.8.0](https://github.com/onecli/onecli-cli/compare/v2.7.0...v2.8.0) (2026-07-29)
+
+
+### Features
+
+* **run:** --enforce - OS-enforced gateway egress via Claude Code's sandbox ([#98](https://github.com/onecli/onecli-cli/issues/98)) ([2b7b5e1](https://github.com/onecli/onecli-cli/commit/2b7b5e1cb3c256f34ecdad572dd20442b62192fa))
+
+## [2.7.0](https://github.com/onecli/onecli-cli/compare/v2.6.0...v2.7.0) (2026-07-25)
+
+
+### Features
+
+* add the policy reflection commands, mark the retired ones ([#95](https://github.com/onecli/onecli-cli/issues/95)) ([14d7ea5](https://github.com/onecli/onecli-cli/commit/14d7ea56402c12974036b8fb79615777e31b9803))
+
+## [2.6.0](https://github.com/onecli/onecli-cli/compare/v2.5.0...v2.6.0) (2026-07-21)
+
+
+### Features
+
+* add the policy command family (/v1/policy + /v1/org/policy) ([#93](https://github.com/onecli/onecli-cli/issues/93)) ([6741097](https://github.com/onecli/onecli-cli/commit/6741097cec2abc19347a7df54f4fd368357e74d9))
+
 ## [2.5.0](https://github.com/onecli/onecli-cli/compare/v2.4.0...v2.5.0) (2026-07-05)
 
 

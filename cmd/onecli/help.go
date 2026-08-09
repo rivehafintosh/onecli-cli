@@ -42,12 +42,14 @@ func (cmd *HelpCmd) Run(out *output.Writer) error {
 			{Name: "run", Description: "Run a command with OneCLI gateway access.", Args: []ArgInfo{
 				{Name: "<command>", Required: true, Description: "Command to execute (e.g. claude, cursor, codex)."},
 				{Name: "--project, -p", Description: "Project slug."},
-				{Name: "--agent", Description: "OneCLI agent identifier (uses default if omitted)."},
+				{Name: "--agent", Description: "OneCLI agent identifier (default: ONECLI_AGENT env, then 'onecli config set agent', then the project's default agent)."},
 				{Name: "--gateway", Description: "Gateway host:port override (default: derived from API host)."},
 				{Name: "--no-ca", Description: "Skip CA cert write and CA trust env injection."},
+				{Name: "--enforce", Description: "OS-enforced governance: route the agent's sandboxed egress through the gateway so it cannot be bypassed (Claude Code only)."},
 				{Name: "--dry-run", Description: "Print resolved env and command without executing."},
 			}},
 			{Name: "agents list", Description: "List all agents.", Args: []ArgInfo{
+				{Name: "--with-grants", Description: "Include each agent's grants summary (attached connections, secrets, LLM keys)."},
 				{Name: "--project, -p", Description: "Project slug."},
 			}},
 			{Name: "agents get-default", Description: "Get the default agent."},
@@ -66,25 +68,64 @@ func (cmd *HelpCmd) Run(out *output.Writer) error {
 			{Name: "agents regenerate-token", Description: "Regenerate an agent's access token.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the agent."},
 			}},
-			{Name: "agents secrets", Description: "List secrets assigned to an agent.", Args: []ArgInfo{
+			{Name: "agents secrets", Description: "RETIRED — updated servers answer 410 Gone. Use 'agents grants list' (attached) or 'agents credentials' (effective).", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the agent."},
 			}},
-			{Name: "agents set-secrets", Description: "Set secrets assigned to an agent.", Args: []ArgInfo{
+			{Name: "agents credentials", Description: "Show which credentials the agent can use and what each one can do (read-only reflection of the published policy).", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "ID of the agent."},
+				{Name: "--project, -p", Description: "Project slug."},
+				{Name: "--fields", Description: "Comma-separated fields to include."},
+				{Name: "--quiet", Description: "Output only the specified field, one per line."},
+			}},
+			{Name: "agents grants list", Description: "Show the agent's grants: attached app connections (with per-tool access) and secrets. Grants are attach INTENT; 'agents credentials' is the effective view.", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "ID of the agent."},
+				{Name: "--project, -p", Description: "Project slug."},
+				{Name: "--fields", Description: "Comma-separated fields to include."},
+				{Name: "--quiet", Description: "Output only the specified field, one per line."},
+			}},
+			{Name: "agents grants attach-connection", Description: "Attach an app connection to the agent. No tool flags = full access; --allow/--ask set per-tool access (the rest is blocked).", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "ID of the agent."},
+				{Name: "--connection-id", Required: true, Description: "ID of the app connection to attach."},
+				{Name: "--allow", Description: "Comma-separated tool IDs to always allow (from 'apps permission-definition')."},
+				{Name: "--ask", Description: "Comma-separated tool IDs that require manual approval before running."},
+				{Name: "--json", Description: "Raw JSON grant body (do not combine with --allow/--ask)."},
+				{Name: "--project, -p", Description: "Project slug."},
+				{Name: "--dry-run", Description: "Validate the request without executing it."},
+			}},
+			{Name: "agents grants detach-connection", Description: "Detach an app connection from the agent.", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "ID of the agent."},
+				{Name: "--connection-id", Required: true, Description: "ID of the app connection to detach."},
+				{Name: "--project, -p", Description: "Project slug."},
+				{Name: "--dry-run", Description: "Validate the request without executing it."},
+			}},
+			{Name: "agents grants attach-secret", Description: "Attach a secret or LLM key to the agent.", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "ID of the agent."},
+				{Name: "--secret-id", Required: true, Description: "ID of the secret (or LLM key) to attach."},
+				{Name: "--project, -p", Description: "Project slug."},
+				{Name: "--dry-run", Description: "Validate the request without executing it."},
+			}},
+			{Name: "agents grants detach-secret", Description: "Detach a secret from the agent.", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "ID of the agent."},
+				{Name: "--secret-id", Required: true, Description: "ID of the secret to detach."},
+				{Name: "--project, -p", Description: "Project slug."},
+				{Name: "--dry-run", Description: "Validate the request without executing it."},
+			}},
+			{Name: "agents set-secrets", Description: "RETIRED — updated servers answer 410 Gone. Attach with 'agents grants attach-secret'.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the agent."},
 				{Name: "--secret-ids", Required: true, Description: "Comma-separated list of secret IDs."},
 			}},
 			{Name: "agents set-default", Description: "Mark an agent as the project default.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the agent."},
 			}},
-			{Name: "agents granular-access", Description: "Show per-agent granular-access policies across the project."},
-			{Name: "agents connections get", Description: "Get an agent's app-connection assignments.", Args: []ArgInfo{
+			{Name: "agents granular-access", Description: "RETIRED — updated servers answer 410 Gone. Resource scoping rides the granting rule's conditions; see 'agents credentials'."},
+			{Name: "agents connections get", Description: "RETIRED — updated servers answer 410 Gone. Use 'agents grants list'.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the agent."},
 			}},
-			{Name: "agents connections set", Description: "Replace an agent's app-connection assignments.", Args: []ArgInfo{
+			{Name: "agents connections set", Description: "RETIRED — updated servers answer 410 Gone. Attach with 'agents grants attach-connection'.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the agent."},
 				{Name: "--json", Required: true, Description: "JSON array of connection assignments."},
 			}},
-			{Name: "agents set-secret-mode", Description: "Set an agent's secret mode.", Args: []ArgInfo{
+			{Name: "agents set-secret-mode", Description: "RETIRED — updated servers answer 410 Gone; agents are always selective. Attach credentials with 'agents grants'.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the agent."},
 				{Name: "--mode", Required: true, Description: "Secret mode: 'all' or 'selective'."},
 			}},
@@ -128,6 +169,18 @@ func (cmd *HelpCmd) Run(out *output.Writer) error {
 				{Name: "--id", Required: true, Description: "ID of the connection."},
 				{Name: "--label", Required: true, Description: "New display label."},
 			}},
+			{Name: "apps connections agent-access", Description: "Show which agents can reach a connection, and what each can do (read-only).", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "ID of the app connection."},
+				{Name: "--project, -p", Description: "Project slug."},
+				{Name: "--fields", Description: "Comma-separated fields to include."},
+				{Name: "--quiet", Description: "Output only the specified field, one per line."},
+			}},
+			{Name: "apps connections grants", Description: "Show which agents a connection is granted to (attach intent, read-only; 'agent-access' is the effective view).", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "ID of the app connection."},
+				{Name: "--project, -p", Description: "Project slug."},
+				{Name: "--fields", Description: "Comma-separated fields to include."},
+				{Name: "--quiet", Description: "Output only the specified field, one per line."},
+			}},
 			{Name: "apps permission-definition", Description: "Show an app's tool catalog (groups + toolIds) for permission rules.", Args: []ArgInfo{
 				{Name: "--provider", Required: true, Description: "Provider name (e.g. 'github', 'gmail')."},
 			}},
@@ -161,39 +214,84 @@ func (cmd *HelpCmd) Run(out *output.Writer) error {
 				{Name: "--provider", Required: true, Description: "Provider name."},
 				{Name: "--rule-id", Required: true, Description: "Blocklist rule ID."},
 			}},
-			{Name: "rules list", Description: "List all policy rules.", Args: []ArgInfo{
+			{Name: "rules list", Description: "RETIRED — updated servers answer 410 Gone. Grant access with 'agents grants'; read it with 'agents credentials'.", Args: []ArgInfo{
 				{Name: "--project, -p", Description: "Project slug."},
 			}},
-			{Name: "rules create", Description: "Create a new policy rule.", Args: []ArgInfo{
+			{Name: "rules get", Description: "RETIRED — updated servers answer 410 Gone. Grant access with 'agents grants'.", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "ID of the rule."},
+			}},
+			{Name: "rules create", Description: "RETIRED — updated servers answer 410 Gone. Attach credentials with 'agents grants attach-connection' / 'attach-secret'.", Args: []ArgInfo{
 				{Name: "--project, -p", Description: "Project slug."},
 				{Name: "--name", Required: true, Description: "Display name for the rule."},
 				{Name: "--host-pattern", Required: true, Description: "Host pattern to match."},
 				{Name: "--action", Required: true, Description: "Action: 'block', 'rate_limit', 'manual_approval', or 'allow'."},
 				{Name: "--conditions", Description: "Content conditions as a JSON array."},
 			}},
-			{Name: "rules update", Description: "Update an existing policy rule.", Args: []ArgInfo{
+			{Name: "rules update", Description: "RETIRED — updated servers answer 410 Gone. Manage per-tool access with 'agents grants attach-connection --allow/--ask'.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the rule to update."},
 			}},
-			{Name: "rules delete", Description: "Delete a policy rule.", Args: []ArgInfo{
+			{Name: "rules delete", Description: "RETIRED — updated servers answer 410 Gone. Detach with 'agents grants detach-connection' / 'detach-secret'.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the rule to delete."},
 			}},
-			{Name: "rules permissions get", Description: "Get layered tool permissions for a provider.", Args: []ArgInfo{
+			{Name: "rules permissions get", Description: "RETIRED — updated servers answer 410 Gone. Use 'policy effective-permissions' to read; set per-tool access with 'agents grants'.", Args: []ArgInfo{
 				{Name: "--provider", Required: true, Description: "Provider name (e.g. 'github', 'gmail')."},
 				{Name: "--agent-id", Description: "Show only this agent's override layer."},
 			}},
-			{Name: "rules permissions set", Description: "Set tool permissions for a provider (optionally per agent).", Args: []ArgInfo{
+			{Name: "rules permissions set", Description: "RETIRED — updated servers answer 410 Gone. Set per-tool access with 'agents grants attach-connection --allow/--ask'.", Args: []ArgInfo{
 				{Name: "--provider", Required: true, Description: "Provider name (e.g. 'github', 'gmail')."},
 				{Name: "--tool", Description: "Tool ID (see 'apps permission-definition')."},
 				{Name: "--permission", Description: "Permission: 'allow', 'manual_approval', 'block', or 'inherit' (agent layer only)."},
 				{Name: "--agent-id", Description: "Target one agent's override layer."},
 				{Name: "--json", Description: "Raw JSON payload with 'changes' array."},
 			}},
-			{Name: "rules overlap", Description: "Count custom rules overlapping an app's hosts.", Args: []ArgInfo{
+			{Name: "rules overlap", Description: "RETIRED — updated servers answer 410 Gone. No replacement — overlap detection lives in the Policy console.", Args: []ArgInfo{
 				{Name: "--provider", Required: true, Description: "Provider name."},
 			}},
+			{Name: "policy rules list", Description: "RETIRED at project scope — updated servers answer 410 Gone (project rules are compiled from grants). Use 'agents grants list'; org rules: 'org policy rules list'.", Args: []ArgInfo{
+				{Name: "--project, -p", Description: "Project slug."},
+				{Name: "--status", Description: "'draft' (default) or 'published' (enforced)."},
+			}},
+			{Name: "policy rules get", Description: "RETIRED at project scope — updated servers answer 410 Gone. Use 'agents grants list'.", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "Draft rule id (published ids regenerate every publish — match by logicalId)."},
+			}},
+			{Name: "policy rules create", Description: "RETIRED at project scope — updated servers answer 410 Gone. Attach credentials with 'agents grants'; org rules: 'org policy rules create'.", Args: []ArgInfo{
+				{Name: "--name", Description: "Display name (required unless --json)."},
+				{Name: "--action", Description: "'allow' or 'block' (required unless --json)."},
+				{Name: "--targets", Description: "JSON array of targets: app/connection/secret/network (required unless --json)."},
+				{Name: "--identities", Description: "JSON array of identities; omit for all agents."},
+				{Name: "--rate-limit", Description: "Max requests per window (allow rules; pair with --rate-limit-window)."},
+				{Name: "--require-approval", Description: "Require manual approval (allow rules)."},
+				{Name: "--json", Description: "Raw JSON payload for the full rule (do not combine with field flags)."},
+				{Name: "--no-publish", Description: "Stage only."},
+				{Name: "--publish-all", Description: "Publish even when the draft holds other staged changes."},
+			}},
+			{Name: "policy rules update", Description: "RETIRED at project scope — updated servers answer 410 Gone. Manage per-tool access with 'agents grants attach-connection --allow/--ask'.", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "Draft rule id."},
+			}},
+			{Name: "policy rules delete", Description: "RETIRED at project scope — updated servers answer 410 Gone. Detach with 'agents grants detach-connection' / 'detach-secret'.", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "Draft rule id."},
+			}},
+			{Name: "policy rules reorder", Description: "RETIRED at project scope — updated servers answer 410 Gone. Grants have no ordering; org rules: 'org policy rules reorder'.", Args: []ArgInfo{
+				{Name: "--ordered-ids", Required: true, Description: "JSON array of all draft rule ids (from 'policy rules list --quiet id')."},
+			}},
+			{Name: "policy default get", Description: "RETIRED at project scope — updated servers answer 410 Gone. The posture is the org Default Rule: 'org policy default get'.", Args: []ArgInfo{
+				{Name: "--status", Description: "'draft' (default) or 'published'."},
+			}},
+			{Name: "policy default set", Description: "RETIRED at project scope — updated servers answer 410 Gone. Set the posture with 'org policy default set --action'.", Args: []ArgInfo{
+				{Name: "--action", Required: true, Description: "'allow' or 'block'."},
+			}},
+			{Name: "policy publish", Description: "RETIRED at project scope — updated servers answer 410 Gone. Grant changes publish immediately; org drafts: 'org policy publish'."},
+			{Name: "policy status", Description: "RETIRED at project scope — updated servers answer 410 Gone. Use 'agents grants list' and 'org policy status'."},
 			{Name: "projects list", Description: "List all projects."},
 			{Name: "projects get", Description: "Get a single project by ID.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the project to retrieve."},
+			}},
+			{Name: "policy effective-permissions", Description: "Show what the published policy allows for an app, per tool (read-only). Replaces 'rules permissions get'.", Args: []ArgInfo{
+				{Name: "--provider", Required: true, Description: "App provider (e.g. 'gmail', 'github')."},
+				{Name: "--agent", Description: "Narrow to one agent's identity; omit for the all-agents baseline."},
+				{Name: "--project, -p", Description: "Project slug."},
+				{Name: "--fields", Description: "Comma-separated fields to include."},
+				{Name: "--quiet", Description: "Output only the specified field, one per line."},
 			}},
 			{Name: "projects create", Description: "Create a new project.", Args: []ArgInfo{
 				{Name: "--name", Required: true, Description: "Display name for the project."},
@@ -218,33 +316,67 @@ func (cmd *HelpCmd) Run(out *output.Writer) error {
 			{Name: "org secrets delete", Description: "Delete an org-scoped secret.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the secret to delete."},
 			}},
-			{Name: "org rules list", Description: "List all org-scoped policy rules."},
-			{Name: "org rules get", Description: "Get a single org-scoped policy rule.", Args: []ArgInfo{
+			{Name: "org rules list", Description: "RETIRED — updated servers answer 410 Gone. Use 'org policy rules list'."},
+			{Name: "org rules get", Description: "RETIRED — updated servers answer 410 Gone. Use 'org policy rules get'.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the rule to retrieve."},
 			}},
-			{Name: "org rules create", Description: "Create a new org-scoped policy rule.", Args: []ArgInfo{
+			{Name: "org rules create", Description: "RETIRED — updated servers answer 410 Gone. Use 'org policy rules create'.", Args: []ArgInfo{
 				{Name: "--name", Required: true, Description: "Display name for the rule."},
 				{Name: "--host-pattern", Required: true, Description: "Host pattern to match."},
 				{Name: "--action", Required: true, Description: "Action: 'block', 'rate_limit', 'manual_approval', or 'allow'."},
 			}},
-			{Name: "org rules update", Description: "Update an org-scoped policy rule.", Args: []ArgInfo{
+			{Name: "org rules update", Description: "RETIRED — updated servers answer 410 Gone. Use 'org policy rules update'.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the rule to update."},
 			}},
-			{Name: "org rules delete", Description: "Delete an org-scoped policy rule.", Args: []ArgInfo{
+			{Name: "org rules delete", Description: "RETIRED — updated servers answer 410 Gone. Use 'org policy rules delete'.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the rule to delete."},
 			}},
-			{Name: "org rules permissions get", Description: "Get tool permissions for a provider.", Args: []ArgInfo{
+			{Name: "org rules permissions get", Description: "RETIRED — updated servers answer 410 Gone. Use 'org policy effective-permissions'.", Args: []ArgInfo{
 				{Name: "--provider", Required: true, Description: "Provider name (e.g. 'github', 'gmail')."},
 			}},
-			{Name: "org rules permissions set", Description: "Set tool permissions for a provider.", Args: []ArgInfo{
+			{Name: "org rules permissions set", Description: "RETIRED — updated servers answer 410 Gone. Author an app-target rule with 'org policy rules create' instead.", Args: []ArgInfo{
 				{Name: "--provider", Required: true, Description: "Provider name (e.g. 'github', 'gmail')."},
 				{Name: "--json", Required: true, Description: "JSON payload with 'changes' array."},
 			}},
-			{Name: "org rules overlap", Description: "Count custom org rules overlapping an app's hosts.", Args: []ArgInfo{
+			{Name: "org rules overlap", Description: "RETIRED — updated servers answer 410 Gone. No replacement — overlap detection lives in the Policy console.", Args: []ArgInfo{
 				{Name: "--provider", Required: true, Description: "Provider name."},
 			}},
+			{Name: "org policy rules list", Description: "List org policy-engine rules (draft or published).", Args: []ArgInfo{
+				{Name: "--status", Description: "'draft' (default) or 'published' (enforced)."},
+			}},
+			{Name: "org policy rules get", Description: "Get one DRAFT org policy rule by id.", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "Draft rule id (published ids regenerate every publish — match by logicalId)."},
+			}},
+			{Name: "org policy rules create", Description: "Create an org policy rule (group/user identities; auto-publishes when the draft is clean).", Args: []ArgInfo{
+				{Name: "--name", Description: "Display name (required unless --json)."},
+				{Name: "--action", Description: "'allow' or 'block' (required unless --json)."},
+				{Name: "--targets", Description: "JSON array of targets (required unless --json)."},
+				{Name: "--identities", Description: "JSON array — org rules take agentGroup/user/group identities."},
+				{Name: "--no-publish", Description: "Stage only."},
+				{Name: "--publish-all", Description: "Publish even when the draft holds other staged changes."},
+			}},
+			{Name: "org policy rules update", Description: "Update a DRAFT org policy rule.", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "Draft rule id."},
+			}},
+			{Name: "org policy rules delete", Description: "Delete a DRAFT org policy rule.", Args: []ArgInfo{
+				{Name: "--id", Required: true, Description: "Draft rule id."},
+			}},
+			{Name: "org policy rules reorder", Description: "Reorder the org draft (full id permutation).", Args: []ArgInfo{
+				{Name: "--ordered-ids", Required: true, Description: "JSON array of all org draft rule ids."},
+			}},
+			{Name: "org policy default get", Description: "Show the org's terminal Default Rule."},
+			{Name: "org policy default set", Description: "Set the org Default Rule's action.", Args: []ArgInfo{
+				{Name: "--action", Required: true, Description: "'allow' or 'block'."},
+			}},
+			{Name: "org policy publish", Description: "Publish the org's WHOLE staged draft."},
+			{Name: "org policy status", Description: "Show the org's staged changes and last publish."},
 			{Name: "org connections list", Description: "List all org-scoped connections.", Args: []ArgInfo{
 				{Name: "--provider", Description: "Filter by provider name."},
+			}},
+			{Name: "org policy effective-permissions", Description: "Show what the published org policy allows for an app, per tool (read-only). Replaces 'org rules permissions get'.", Args: []ArgInfo{
+				{Name: "--provider", Required: true, Description: "App provider (e.g. 'gmail', 'github')."},
+				{Name: "--fields", Description: "Comma-separated fields to include."},
+				{Name: "--quiet", Description: "Output only the specified field, one per line."},
 			}},
 			{Name: "org connections rename", Description: "Rename an org-scoped connection.", Args: []ArgInfo{
 				{Name: "--id", Required: true, Description: "ID of the connection."},
@@ -326,8 +458,8 @@ func (cmd *HelpCmd) Run(out *output.Writer) error {
 				{Name: "--provider", Required: true, Description: "Provider name."},
 				{Name: "--rule-id", Required: true, Description: "Blocklist rule ID."},
 			}},
-			{Name: "org settings get", Description: "Get organization settings (policy mode)."},
-			{Name: "org settings set", Description: "Update organization settings.", Args: []ArgInfo{
+			{Name: "org settings get", Description: "RETIRED — updated servers answer 410 Gone. The allow/deny posture is the Default Rule — use 'org policy default'."},
+			{Name: "org settings set", Description: "RETIRED — updated servers answer 410 Gone. Set the posture with 'org policy default set --action'.", Args: []ArgInfo{
 				{Name: "--policy-mode", Required: true, Description: "Policy mode: 'allow' or 'deny'."},
 			}},
 			{Name: "vaults list", Description: "List external vault connections (e.g. 1Password)."},
@@ -340,8 +472,11 @@ func (cmd *HelpCmd) Run(out *output.Writer) error {
 			}},
 			{Name: "auth api-key", Description: "Show your current API key."},
 			{Name: "auth regenerate-api-key", Description: "Regenerate your API key."},
-			{Name: "config get <key>", Description: "Get a config value."},
-			{Name: "config set <key> <value>", Description: "Set a config value."},
+			{Name: "config get <key>", Description: "Get a config value. Keys: api-host, project, agent."},
+			{Name: "config set <key> <value>", Description: "Set a config value. Keys: api-host, project, agent."},
+			{Name: "sandbox audit", Description: "Red-team the enforce-mode sandbox: attempt every known egress bypass and report which the OS actually stops. Exits non-zero if any hole is found.", Args: []ArgInfo{
+				{Name: "<agent>", Description: "Agent to audit (codex, cursor, claude, ...). Defaults to the OneCLI-owned sandbox."},
+			}},
 			{Name: "migrate", Description: "Migrate data to OneCLI Cloud.", Args: []ArgInfo{
 				{Name: "--cloud-key", Required: true, Description: "OneCLI Cloud API key."},
 			}},
